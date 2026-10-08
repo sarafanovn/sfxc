@@ -34,6 +34,7 @@ use widgets::{button, dialog, Kind};
 const AUTO_VERSION_SECS: i64 = 300;
 const AUTO_VERSION_CHECK: Duration = Duration::from_secs(10);
 const DRAFT_SAVE_DELAY: Duration = Duration::from_millis(500);
+const SYNC_CHECK: Duration = Duration::from_secs(1);
 const TOAST_TIME: Duration = Duration::from_secs(4);
 const TITLEBAR_H: f32 = 30.0;
 
@@ -59,6 +60,25 @@ fn apply_rename(store: &Store, current: Option<&mut Current>, id: i64, name: &st
 
 fn fresh_seed() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(1, |d| d.as_nanos() as u64)
+}
+
+#[derive(Debug, PartialEq)]
+enum OutsideChange {
+    Unchanged,
+    Reload,
+    KeepEdits,
+    Deleted,
+}
+
+/// What to do with the open sound after another process wrote to the library. `db_draft` is `None` when the
+/// sound is gone; `saved_json` is what the app last saved or loaded; `local_json` is the patch on screen.
+fn outside_change(db_draft: Option<&str>, saved_json: &str, local_json: &str) -> OutsideChange {
+    match db_draft {
+        None => OutsideChange::Deleted,
+        Some(d) if d == saved_json => OutsideChange::Unchanged,
+        Some(_) if local_json == saved_json => OutsideChange::Reload,
+        Some(_) => OutsideChange::KeepEdits,
+    }
 }
 
 pub enum Action {
@@ -141,6 +161,8 @@ pub struct SfxcApp {
     toasts: Vec<Toast>,
     export_job: Option<ExportJob>,
     last_auto_check: Instant,
+    data_version: Option<i64>,
+    last_sync: Instant,
 }
 
 impl SfxcApp {
@@ -173,6 +195,8 @@ impl SfxcApp {
             toasts: Vec::new(),
             export_job: None,
             last_auto_check: Instant::now(),
+            data_version: None,
+            last_sync: Instant::now(),
         };
         app.open_store();
         app.apply_prefs();
@@ -730,6 +754,47 @@ impl SfxcApp {
         }
     }
 
+    /// Picks up writes from other processes (`sfxc-cli`): refreshes the lists and reloads the open sound unless
+    /// the person has unsaved edits. Every CLI write is a version, so keeping the edits loses nothing.
+    fn sync_outside_changes(&mut self, ctx: &egui::Context) {
+        ctx.request_repaint_after(SYNC_CHECK);
+        if self.last_sync.elapsed() < SYNC_CHECK {
+            return;
+        }
+        self.last_sync = Instant::now();
+        let Some(version) = self.store.as_ref().and_then(|s| s.data_version().ok()) else { return };
+        let changed = self.data_version.is_some_and(|v| v != version);
+        self.data_version = Some(version);
+        if !changed {
+            return;
+        }
+        self.refresh_list();
+        let Some((id, saved, local)) = self.current.as_ref().map(|c| (c.id, c.saved_json.clone(), c.patch.to_json())) else { return };
+        let Some(store) = &self.store else { return };
+        let r = store.draft_json_if_exists(id);
+        let Some(db) = self.check(r) else { return };
+        match outside_change(db.as_deref(), &saved, &local) {
+            OutsideChange::Unchanged => self.refresh_versions(),
+            OutsideChange::Reload => {
+                self.open_sound(id);
+                self.toast_ok("Updated outside the app");
+            }
+            OutsideChange::KeepEdits => {
+                if let (Some(cur), Some(db)) = (self.current.as_mut(), db) {
+                    cur.saved_json = db;
+                }
+                self.refresh_versions();
+                self.toast("Changed outside the app; your edits are kept, the outside version is in history");
+            }
+            OutsideChange::Deleted => {
+                self.current = None;
+                self.versions.clear();
+                self.rendered = None;
+                self.toast("The open sound was deleted outside the app");
+            }
+        }
+    }
+
     fn housekeeping(&mut self, ctx: &egui::Context) {
         if let Some(t) = self.current.as_ref().and_then(|c| c.changed_at) {
             if t.elapsed() >= DRAFT_SAVE_DELAY {
@@ -922,6 +987,7 @@ impl eframe::App for SfxcApp {
             self.apply(a);
         }
         self.housekeeping(&ctx);
+        self.sync_outside_changes(&ctx);
         self.show_toasts(&ctx);
     }
 }
@@ -929,6 +995,14 @@ impl eframe::App for SfxcApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn outside_change_reloads_keeps_edits_or_closes() {
+        assert_eq!(outside_change(Some("a"), "a", "a"), OutsideChange::Unchanged);
+        assert_eq!(outside_change(Some("b"), "a", "a"), OutsideChange::Reload);
+        assert_eq!(outside_change(Some("b"), "a", "mine"), OutsideChange::KeepEdits);
+        assert_eq!(outside_change(None, "a", "a"), OutsideChange::Deleted);
+    }
 
     fn current(id: i64, name: &str) -> Current {
         Current {
