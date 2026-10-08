@@ -1,4 +1,4 @@
-use eframe::egui::{self, vec2, Align, Align2, FontId, Frame, Id, Layout, Margin, Pos2, Rect, RichText, Sense, Ui};
+use eframe::egui::{self, Align, FontId, Frame, Id, Layout, Margin, Rect, RichText, Ui};
 use egui_phosphor::regular as icon;
 use sfxc_core::generators::Category;
 use sfxc_core::mode::{describe_mapping, map_source_to_mode, NES_DUTIES};
@@ -6,7 +6,7 @@ use sfxc_core::patch::*;
 
 use super::theme::{self, palette};
 use super::widgets::{
-    banner, button, icon_button, material_card, material_card_response, param, play_button, row_label, section, segmented, select, toggle,
+    banner, button, icon_button, material_card, param, play_button, row_label, section, segmented, select, toggle,
     waveform, Grip, Kind, Tone,
 };
 use super::{arp, controls, effects, order, Action, Current};
@@ -79,60 +79,43 @@ pub fn show(
     });
 }
 
-/// A small speaker whose bottom-right corner sits at `anchor`; it grows into the playback Volume
-/// slider while the pointer is over it.
-pub fn dock(ui: &mut Ui, anchor: Pos2, volume: &mut f32, actions: &mut Vec<Action>) {
-    const OPEN_W: f32 = 236.0;
-    const ROW_H: f32 = 30.0;
-    let p = palette(ui);
-    let id = Id::new("dock");
-    let last: Option<(Rect, bool)> = ui.data(|d| d.get_temp(id.with("state")));
-    let pointer = ui.ctx().pointer_hover_pos();
-    let dragging = ui.input(|i| i.pointer.any_down());
-    // Stay open while a slider is being dragged even if the pointer leaves the card.
-    let open = last.is_some_and(|(rect, was_open)| pointer.is_some_and(|pt| rect.expand(10.0).contains(pt)) || (was_open && dragging));
-    let t = ui.ctx().animate_bool_with_time(id.with("t"), open, 0.18);
-    let rows_h = ROW_H + 8.0;
-    let w = egui::lerp(36.0..=OPEN_W, t);
-
-    let area = egui::Area::new(id)
-        .order(egui::Order::Foreground)
-        .pivot(Align2::RIGHT_BOTTOM)
-        .fixed_pos(anchor)
-        .show(ui.ctx(), |ui| {
-            material_card_response(ui, |ui| {
-                ui.set_width(w);
-                if t > 0.02 {
-                    let (r, _) = ui.allocate_exact_size(vec2(w, rows_h * t), Sense::hover());
-                    let mut rows = ui.new_child(egui::UiBuilder::new().max_rect(Rect::from_min_size(r.min, vec2(w, rows_h))).layout(Layout::top_down(Align::LEFT)));
-                    rows.set_clip_rect(r.intersect(rows.clip_rect()));
-                    rows.set_opacity(t);
-                    dock_row(&mut rows, "Volume", w, |ui, width| {
-                        let mut pos = crate::audio::slider_from_volume(*volume);
-                        let default = crate::audio::slider_from_volume(crate::audio::DEFAULT_VOLUME);
-                        let r = controls::track(ui, &mut pos, 0.0, 1.0, default, false, width);
-                        *volume = crate::audio::volume_from_slider(pos);
-                        if r.drag_stopped() || (r.changed() && !r.dragged()) {
-                            actions.push(Action::SaveVolume);
-                        }
-                    });
-                }
+/// Volume button in the style of the library's Settings button: a flat button that opens a popup with
+/// the playback-volume slider. Returns the button's rect.
+pub fn volume_button(ui: &mut Ui, volume: &mut f32, actions: &mut Vec<Action>) -> Rect {
+    let glyph = match *volume {
+        v if v <= 0.001 => icon::SPEAKER_X,
+        v if v < 0.35 => icon::SPEAKER_LOW,
+        _ => icon::SPEAKER_HIGH,
+    };
+    let resp = button(ui, Kind::Ghost, Some(glyph), "Volume");
+    egui::Popup::from_toggle_button_response(&resp)
+        .align(egui::RectAlign::TOP_START)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .width(260.0)
+        .show(|ui| {
+            let p = palette(ui);
+            ui.set_width(260.0);
+            ui.add_space(2.0);
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Volume").font(FontId::new(13.5, theme::semibold())).color(p.text));
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.label(RichText::new(icon::SPEAKER_HIGH).color(p.muted).size(18.0));
+                    ui.label(RichText::new(format!("{:.0}%", *volume * 100.0)).color(p.muted).size(12.5));
                 });
-            })
+            });
+            ui.add_space(8.0);
+            let mut pos = crate::audio::slider_from_volume(*volume);
+            let default = crate::audio::slider_from_volume(crate::audio::DEFAULT_VOLUME);
+            let r = controls::track(ui, &mut pos, 0.0, 1.0, default, false, 236.0);
+            *volume = crate::audio::volume_from_slider(pos);
+            if r.drag_stopped() || (r.changed() && !r.dragged()) {
+                actions.push(Action::SaveVolume);
+            }
+            ui.add_space(4.0);
+            ui.label(super::widgets::hint(ui, "Playback only. A sound's own level is Gain."));
+            #[cfg(test)]
+            ui.data_mut(|d| d.insert_temp(Id::new("volume_track"), r.rect));
         });
-    ui.data_mut(|d| d.insert_temp(id.with("state"), (area.inner.response.rect, open)));
-}
-
-fn dock_row(ui: &mut Ui, label: &str, total: f32, add: impl FnOnce(&mut Ui, f32)) {
-    const LABEL_W: f32 = 56.0;
-    ui.horizontal(|ui| {
-        ui.set_height(30.0);
-        ui.label(RichText::new(label).size(12.5).color(palette(ui).muted));
-        ui.add_space((LABEL_W - 40.0).max(0.0));
-        add(ui, (total - LABEL_W - ui.spacing().item_spacing.x * 2.0).max(60.0));
-    });
+    resp.rect
 }
 
 fn header(ui: &mut Ui, cur: &mut Current, view: &View, actions: &mut Vec<Action>) {

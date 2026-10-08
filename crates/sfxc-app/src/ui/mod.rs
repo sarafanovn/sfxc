@@ -874,18 +874,21 @@ impl eframe::App for SfxcApp {
             let current = self.current.as_ref().map(|c| c.id);
             library::show(ui, &self.sounds, &mut self.search, current, now, &self.prefs, &mut actions);
         });
-        let versions_rect = egui::Panel::right("versions")
+        egui::Panel::right("versions")
             .resizable(false)
             .exact_size(292.0)
             .show_separator_line(false)
             .frame(side(18))
             .show(ui, |ui| {
-                // Empty strip under the history: the volume control floats here.
-                egui::Panel::bottom("versions_footer").exact_size(56.0).frame(egui::Frame::NONE).show_separator_line(false).show(ui, |_| {});
+                egui::Panel::bottom("versions_footer").frame(egui::Frame::NONE).show_separator_line(false).show(ui, |ui| {
+                    // The footer is its own panel and clips to its content rect; the button's shadow needs the panel margin.
+                    ui.set_clip_rect(ui.clip_rect().expand(14.0));
+                    ui.add_space(6.0);
+                    editor::volume_button(ui, &mut self.prefs.volume, &mut actions);
+                    ui.add_space(4.0);
+                });
                 versions::show(ui, &self.versions, self.current_version, self.current.is_some(), now, &mut actions);
-            })
-            .response
-            .rect;
+            });
         let progress = self.player.progress();
         if progress.is_some() {
             ctx.request_repaint();
@@ -921,7 +924,6 @@ impl eframe::App for SfxcApp {
                 );
             }
         });
-        editor::dock(ui, versions_rect.right_bottom() - egui::vec2(18.0, 14.0), &mut self.prefs.volume, &mut actions);
         self.player.set_volume(self.prefs.volume);
 
         self.after_edit(before, &ctx);
@@ -1126,37 +1128,51 @@ mod render_smoke {
         assert_eq!(open, Some(false), "title click should fold the card");
     }
 
-    /// The volume dock is a small speaker that grows while the pointer is over it.
+    /// Like the Settings button: click opens a popup with the slider, dragging it sets and saves the volume.
     #[test]
-    fn volume_dock_opens_on_hover_and_closes_again() {
+    fn volume_button_opens_a_popup_whose_slider_sets_the_volume() {
+        use eframe::egui::PointerButton;
         let ctx = egui::Context::default();
         theme::install(&ctx);
-        let anchor = pos2(900.0, 780.0);
-        let (mut t, mut vol) = (0.0f64, 0.8f32);
-        let mut run = |pointer: Option<egui::Pos2>, frames: usize| {
-            for _ in 0..frames {
-                t += 0.05;
-                let events = pointer.map(Event::PointerMoved).into_iter().collect();
-                let input = egui::RawInput {
-                    screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 800.0))),
-                    events,
-                    time: Some(t),
-                    ..Default::default()
-                };
-                let mut out = ctx.run_ui(input, |ui| editor::dock(ui, anchor, &mut vol, &mut Vec::new()));
-                out.textures_delta.clear();
-            }
+        let (mut t, mut vol, mut actions) = (0.0f64, 0.2f32, Vec::new());
+        let mut button_rect = Rect::NOTHING;
+        let mut run = |events: Vec<Event>, vol: &mut f32, actions: &mut Vec<Action>, button_rect: &mut Rect| {
+            t += 0.05;
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 800.0))),
+                events,
+                time: Some(t),
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(input, |ui| {
+                ui.add_space(500.0);
+                *button_rect = editor::volume_button(ui, vol, actions);
+            });
+            out.textures_delta.clear();
+            ctx.data(|d| d.get_temp::<Rect>(egui::Id::new("volume_track"))).unwrap_or(Rect::NOTHING)
         };
-        let width = |ctx: &egui::Context| {
-            ctx.data(|d| d.get_temp::<(Rect, bool)>(egui::Id::new("dock").with("state"))).map_or(0.0, |(r, _)| r.width())
-        };
-        run(None, 3);
-        let closed = width(&ctx);
-        run(Some(anchor - vec2(15.0, 15.0)), 12);
-        let open = width(&ctx);
-        assert!(open > closed + 100.0, "dock should grow under the pointer: {closed} -> {open}");
-        run(Some(pos2(100.0, 100.0)), 12);
-        assert!(width(&ctx) < closed + 5.0, "dock should fold again when the pointer leaves");
+        let button = |pos, pressed| Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Default::default() };
+        run(vec![], &mut vol, &mut actions, &mut button_rect);
+        let at = button_rect.center();
+        run(vec![Event::PointerMoved(at)], &mut vol, &mut actions, &mut button_rect);
+        run(vec![button(at, true)], &mut vol, &mut actions, &mut button_rect);
+        run(vec![button(at, false)], &mut vol, &mut actions, &mut button_rect);
+        run(vec![], &mut vol, &mut actions, &mut button_rect);
+        assert!(egui::Popup::is_any_open(&ctx), "clicking the button should open the popup");
+        let track = run(vec![], &mut vol, &mut actions, &mut button_rect);
+        assert!(track.width() > 100.0, "the popup should contain the slider");
+        // Grab the handle (volume 0.2 sits at sqrt(0.2) of the rail) and drag it to the right.
+        let handle_x = track.left() + 8.0 + crate::audio::slider_from_volume(0.2) * (track.width() - 16.0);
+        let from = pos2(handle_x, track.center().y);
+        let to = from + vec2(80.0, 0.0);
+        run(vec![Event::PointerMoved(from)], &mut vol, &mut actions, &mut button_rect);
+        run(vec![button(from, true)], &mut vol, &mut actions, &mut button_rect);
+        run(vec![Event::PointerMoved(from + vec2(40.0, 0.0))], &mut vol, &mut actions, &mut button_rect);
+        run(vec![Event::PointerMoved(to)], &mut vol, &mut actions, &mut button_rect);
+        run(vec![button(to, false)], &mut vol, &mut actions, &mut button_rect);
+        run(vec![], &mut vol, &mut actions, &mut button_rect);
+        assert!(vol > 0.5, "dragging the handle right should raise the volume, got {vol}");
+        assert!(actions.iter().any(|a| matches!(a, Action::SaveVolume)), "a finished drag should be saved");
     }
 
     fn sweep(picker_open: bool) {
