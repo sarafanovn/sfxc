@@ -6,9 +6,9 @@ use sfxc_core::patch::*;
 
 use super::theme::{self, palette};
 use super::widgets::{
-    accent_slider, banner, row_label, button, card, icon_button, material_card, param, play_button, segmented, toggle, waveform, Kind, Tone,
+    banner, row_label, button, card, icon_button, material_card, param, play_button, segmented, toggle, waveform, Kind, Tone,
 };
-use super::{effects, Action, Current};
+use super::{controls, effects, Action, Current};
 
 /// Read-only state the editor shows but does not own.
 pub struct View<'a> {
@@ -146,14 +146,11 @@ fn transport(ui: &mut Ui, cur: &mut Current, view: &View, autoplay: &mut bool, v
             ui.add_space(12.0);
             toggle(ui, autoplay, "Auto-play").on_hover_text("Play after every change");
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.spacing_mut().slider_width = 120.0;
                 let mut pos = crate::audio::slider_from_volume(*volume);
-                let r = accent_slider(ui, egui::Slider::new(&mut pos, 0.0..=1.0).show_value(false));
-                if r.double_clicked() {
-                    pos = crate::audio::slider_from_volume(crate::audio::DEFAULT_VOLUME);
-                }
+                let default = crate::audio::slider_from_volume(crate::audio::DEFAULT_VOLUME);
+                let r = controls::track(ui, &mut pos, 0.0, 1.0, default, false, 120.0);
                 *volume = crate::audio::volume_from_slider(pos);
-                if r.drag_stopped() || (r.changed() && !r.dragged()) || r.double_clicked() {
+                if r.drag_stopped() || (r.changed() && !r.dragged()) {
                     actions.push(Action::SaveVolume);
                 }
                 ui.label(RichText::new(icon::SPEAKER_HIGH).color(palette(ui).muted).size(16.0)).on_hover_text("Volume");

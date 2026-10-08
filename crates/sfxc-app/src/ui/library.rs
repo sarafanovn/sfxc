@@ -180,8 +180,7 @@ fn settings_button(ui: &mut egui::Ui, prefs: &Prefs, actions: &mut Vec<Action>) 
             });
             ui.add_space(4.0);
             let mut hue = prefs.accent_hue;
-            ui.spacing_mut().slider_width = 236.0;
-            let r = ui.add(egui::Slider::new(&mut hue, 0.0..=359.0).show_value(false));
+            let r = super::controls::track(ui, &mut hue, 0.0, 359.0, accent::DEFAULT_HUE, false, 236.0);
             if r.changed() {
                 actions.push(Action::SetAccent { hue, persist: !r.dragged() });
             }

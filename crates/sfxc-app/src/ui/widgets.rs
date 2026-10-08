@@ -8,6 +8,7 @@ use egui_phosphor::regular as icon;
 use eframe::egui::emath::Numeric;
 use sfxc_core::patch::Range;
 
+use super::controls;
 use super::material::{self, Motion};
 use super::theme::{self, palette, Palette, R_CARD, R_CONTROL};
 
@@ -33,18 +34,25 @@ pub fn param_num<N: Numeric>(ui: &mut Ui, label: &str, v: &mut N, lo: N, hi: N, 
     param_row(ui, label, v, lo, hi, default, suffix, false)
 }
 
+/// Rotary variant of [`param`] for compact layouts (effect cards).
+#[allow(dead_code)] // Used by the effects chain (Task 9).
+pub fn knob(ui: &mut Ui, label: &str, v: &mut f32, range: Range, default: f32, suffix: &str, log: bool) -> Response {
+    controls::knob(ui, label, v, range.0, range.1, default, suffix, log)
+}
+
+#[allow(dead_code)] // Used by the effects chain (Task 9).
+pub fn knob_num<N: Numeric>(ui: &mut Ui, label: &str, v: &mut N, lo: N, hi: N, default: N, suffix: &str) -> Response {
+    controls::knob(ui, label, v, lo, hi, default, suffix, false)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn param_row<N: Numeric>(ui: &mut Ui, label: &str, v: &mut N, lo: N, hi: N, default: N, suffix: &str, log: bool) -> Response {
     let total = ui.available_width();
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = ROW_GAP;
         row_label(ui, label);
-        ui.spacing_mut().slider_width = (total - LABEL_W - VALUE_W - ROW_GAP * 2.0).max(60.0);
-        let mut resp = accent_slider(ui, egui::Slider::new(v, lo..=hi).show_value(false).logarithmic(log));
-        if resp.double_clicked() {
-            *v = default;
-            resp.mark_changed();
-        }
+        let width = (total - LABEL_W - VALUE_W - ROW_GAP * 2.0).max(60.0);
+        let resp = controls::track(ui, v, lo, hi, default, log, width);
         let mut drag = egui::DragValue::new(v).range(lo..=hi).suffix(suffix).max_decimals(3);
         if !log {
             drag = drag.speed(((hi.to_f64() - lo.to_f64()) / 400.0).max(if N::INTEGRAL { 0.05 } else { 0.0 }));
@@ -52,30 +60,16 @@ fn param_row<N: Numeric>(ui: &mut Ui, label: &str, v: &mut N, lo: N, hi: N, defa
         let dv = ui.allocate_ui_with_layout(
             Vec2::new(VALUE_W, ui.spacing().interact_size.y),
             Layout::centered_and_justified(egui::Direction::LeftToRight),
-            |ui| ui.add(drag),
+            |ui| {
+                ui.scope(|ui| {
+                    ui.visuals_mut().widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
+                    ui.add(drag)
+                })
+                .inner
+            },
         );
         let dv = dv.inner;
         resp.union(dv)
-    })
-    .inner
-}
-
-/// Slider with an accent-filled track and a ring handle.
-pub fn accent_slider(ui: &mut Ui, slider: egui::Slider<'_>) -> Response {
-    let p = palette(ui);
-    ui.scope(|ui| {
-        let w = &mut ui.visuals_mut().widgets;
-        w.inactive.bg_fill = p.hover;
-        for wv in [&mut w.inactive, &mut w.hovered, &mut w.active] {
-            wv.fg_stroke = Stroke::new(2.0, p.accent);
-            wv.bg_stroke = Stroke::NONE;
-        }
-        w.hovered.bg_fill = p.surface;
-        w.active.bg_fill = p.surface;
-        ui.visuals_mut().selection.bg_fill = p.accent;
-        // Slider handle radius follows the widget height; keep it compact.
-        ui.spacing_mut().interact_size.y = 18.0;
-        ui.add(slider)
     })
     .inner
 }
