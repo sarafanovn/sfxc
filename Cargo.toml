@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/sfxc-core", "crates/sfxc-store", "crates/sfxc-app"]
+members = ["crates/sfxc-core", "crates/sfxc-store", "crates/sfxc-app", "crates/sfxc-cli"]
 
 [workspace.package]
 version = "0.1.0"
