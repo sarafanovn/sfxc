@@ -1,12 +1,14 @@
 //! Design tokens, fonts and egui styles for the light and dark themes.
 //!
-//! One accent (emerald) on zinc neutrals. Corner radii follow one rule:
-//! controls 6, cards 10, dialogs 14.
+//! Zinc neutrals plus one accent. The accent hue is a user setting; accent colors
+//! are derived from it in OKLCH. Corner radii follow one rule: controls 6, cards 10, dialogs 14.
 
 use eframe::egui::{
-    self, Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Margin, Shadow, Stroke, TextStyle, Theme,
+    self, Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Id, Margin, Shadow, Stroke, TextStyle, Theme,
     ThemePreference, Visuals,
 };
+
+use super::accent;
 
 pub const R_CONTROL: u8 = 6;
 pub const R_CARD: u8 = 10;
@@ -64,7 +66,7 @@ pub const DARK: Palette = Palette {
     border_strong: rgb(0x3A3A41),
     text: rgb(0xEDEDF0),
     muted: rgb(0xA1A1AA),
-    faint: rgb(0x7A7A84),
+    faint: rgb(0x8A8A94),
     accent: rgb(0x34D399),
     accent_hover: rgb(0x5EDDB0),
     on_accent: rgb(0x04291C),
@@ -102,15 +104,59 @@ pub const LIGHT: Palette = Palette {
     shadow: Color32::from_rgba_unmultiplied_const(24, 24, 27, 28),
 };
 
-pub fn palette(ui: &egui::Ui) -> &'static Palette {
-    if ui.visuals().dark_mode { &DARK } else { &LIGHT }
+/// OKLCH lightness and chroma of each accent role; the hue comes from the user.
+struct AccentLevels {
+    accent: (f32, f32),
+    hover: (f32, f32),
+    on_accent: (f32, f32),
+    soft: (f32, f32),
+    text: (f32, f32),
 }
 
-pub fn palette_of(ctx: &egui::Context) -> &'static Palette {
-    match ctx.theme() {
-        Theme::Dark => &DARK,
-        Theme::Light => &LIGHT,
+const LIGHT_ACCENT: AccentLevels =
+    AccentLevels { accent: (0.50, 0.13), hover: (0.45, 0.13), on_accent: (0.99, 0.01), soft: (0.92, 0.03), text: (0.42, 0.11) };
+const DARK_ACCENT: AccentLevels =
+    AccentLevels { accent: (0.80, 0.13), hover: (0.86, 0.12), on_accent: (0.24, 0.05), soft: (0.33, 0.04), text: (0.84, 0.10) };
+
+pub fn with_accent(base: Palette, hue: f32, dark: bool) -> Palette {
+    let a = if dark { &DARK_ACCENT } else { &LIGHT_ACCENT };
+    let c = |(l, ch): (f32, f32)| accent::oklch(l, ch, hue);
+    Palette {
+        accent: c(a.accent),
+        accent_hover: c(a.hover),
+        on_accent: c(a.on_accent),
+        accent_soft: c(a.soft),
+        accent_text: c(a.text),
+        ..base
     }
+}
+
+fn palette_id(dark: bool) -> Id {
+    Id::new(("sfxc_palette", dark))
+}
+
+/// Rebuilds both palettes for `hue` and restyles egui with them.
+pub fn set_accent(ctx: &egui::Context, hue: f32) {
+    let light = with_accent(LIGHT, hue, false);
+    let dark = with_accent(DARK, hue, true);
+    ctx.data_mut(|d| {
+        d.insert_temp(palette_id(false), light);
+        d.insert_temp(palette_id(true), dark);
+    });
+    ctx.set_style_of(Theme::Light, style(&light, false));
+    ctx.set_style_of(Theme::Dark, style(&dark, true));
+}
+
+fn palette_for(ctx: &egui::Context, dark: bool) -> Palette {
+    ctx.data(|d| d.get_temp::<Palette>(palette_id(dark))).unwrap_or(if dark { DARK } else { LIGHT })
+}
+
+pub fn palette(ui: &egui::Ui) -> Palette {
+    palette_for(ui.ctx(), ui.visuals().dark_mode)
+}
+
+pub fn palette_of(ctx: &egui::Context) -> Palette {
+    palette_for(ctx, ctx.theme() == Theme::Dark)
 }
 
 /// User-facing theme setting, stored in the library as a string.
@@ -179,8 +225,7 @@ pub fn title_style() -> TextStyle {
 
 pub fn install(ctx: &egui::Context) {
     ctx.set_fonts(fonts());
-    ctx.set_style_of(Theme::Dark, style(&DARK, true));
-    ctx.set_style_of(Theme::Light, style(&LIGHT, false));
+    set_accent(ctx, accent::DEFAULT_HUE);
 }
 
 fn fonts() -> FontDefinitions {
@@ -276,4 +321,32 @@ fn visuals(p: &Palette, dark: bool) -> Visuals {
         wv.expansion = 0.0;
     }
     v
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::accent::contrast;
+
+    #[test]
+    fn accent_contrast_holds_for_every_hue() {
+        for (base, dark) in [(LIGHT, false), (DARK, true)] {
+            for step in 0..72 {
+                let p = with_accent(base, step as f32 * 5.0, dark);
+                let h = step * 5;
+                assert!(contrast(p.accent_text, p.surface) >= 4.5, "accent_text hue {h} dark {dark}");
+                assert!(contrast(p.on_accent, p.accent) >= 4.5, "on_accent hue {h} dark {dark}");
+            }
+        }
+    }
+
+    #[test]
+    fn neutral_text_contrast() {
+        for p in [LIGHT, DARK] {
+            for c in [p.text, p.muted, p.faint] {
+                assert!(contrast(c, p.surface) >= 4.5);
+                assert!(contrast(c, p.canvas) >= 4.5);
+            }
+        }
+    }
 }

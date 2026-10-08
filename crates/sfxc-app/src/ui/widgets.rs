@@ -233,7 +233,7 @@ pub fn panel_header(ui: &mut Ui, title: &str, trailing: impl FnOnce(&mut Ui)) {
 /// Small rounded label. `tone` picks the colors.
 pub fn badge(ui: &mut Ui, text: &str, tone: Tone) -> Response {
     let p = palette(ui);
-    let (fg, bg) = tone.colors(p);
+    let (fg, bg) = tone.colors(&p);
     let galley = ui.painter().layout_no_wrap(text.to_string(), FontId::proportional(11.0), fg);
     let (rect, resp) = ui.allocate_exact_size(galley.size() + Vec2::new(12.0, 4.0), Sense::hover());
     ui.painter().rect_filled(rect, R_CONTROL, bg);
@@ -263,7 +263,7 @@ impl Tone {
 /// Inline notice with an icon. Returns true when its close button was clicked.
 pub fn banner(ui: &mut Ui, tone: Tone, icon_glyph: &str, text: &str, closable: bool) -> bool {
     let p = palette(ui);
-    let (fg, bg) = tone.colors(p);
+    let (fg, bg) = tone.colors(&p);
     let mut closed = false;
     Frame::new().fill(bg).corner_radius(R_CONTROL).inner_margin(Margin::symmetric(10, 6)).show(ui, |ui| {
         ui.set_width(ui.available_width());

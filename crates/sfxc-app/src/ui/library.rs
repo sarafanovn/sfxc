@@ -1,6 +1,7 @@
 use eframe::egui::{self, Align, CursorIcon, FontId, Id, Key, Layout, Pos2, Sense, Vec2};
 use egui_phosphor::regular as icon;
 
+use super::accent;
 use super::theme::{palette, ThemeChoice, UI_SCALES};
 use super::widgets::{self, age, button, empty_state, icon_button, row_background, search_field, segmented, Kind};
 use super::Action;
@@ -18,6 +19,8 @@ pub struct Prefs {
     pub scale: f32,
     /// Playback amplitude, 0..=1. Not part of any sound.
     pub volume: f32,
+    /// Accent hue in degrees, 0..360.
+    pub accent_hue: f32,
 }
 
 pub fn show(
@@ -156,6 +159,34 @@ fn settings_button(ui: &mut egui::Ui, prefs: &Prefs, actions: &mut Vec<Action>) 
             let opts: Vec<(ThemeChoice, &str)> = options.iter().map(|(t, l)| (*t, l.as_str())).collect();
             if segmented(ui, &mut theme, &opts) {
                 actions.push(Action::SetTheme(theme));
+            }
+            ui.add_space(10.0);
+            ui.label(widgets::hint(ui, "Accent"));
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                let dark = ui.visuals().dark_mode;
+                for hue in accent::SWATCHES {
+                    let color = super::theme::with_accent(p, hue, dark).accent;
+                    let (rect, r) = ui.allocate_exact_size(Vec2::splat(22.0), Sense::click());
+                    let selected = (prefs.accent_hue - hue).abs() < 0.5;
+                    ui.painter().circle_filled(rect.center(), if selected { 10.0 } else { 8.0 }, color);
+                    if selected {
+                        ui.painter().circle_stroke(rect.center(), 10.0, egui::Stroke::new(2.0, p.text));
+                    }
+                    if r.on_hover_cursor(CursorIcon::PointingHand).clicked() {
+                        actions.push(Action::SetAccent { hue, persist: true });
+                    }
+                }
+            });
+            ui.add_space(4.0);
+            let mut hue = prefs.accent_hue;
+            ui.spacing_mut().slider_width = 236.0;
+            let r = ui.add(egui::Slider::new(&mut hue, 0.0..=359.0).show_value(false));
+            if r.changed() {
+                actions.push(Action::SetAccent { hue, persist: !r.dragged() });
+            }
+            if r.drag_stopped() {
+                actions.push(Action::SetAccent { hue, persist: true });
             }
             ui.add_space(10.0);
             ui.label(widgets::hint(ui, "Interface size"));

@@ -1,5 +1,6 @@
 //! Main window: wires store, renderer, player and the panels together.
 
+mod accent;
 mod editor;
 mod effects;
 mod export_dialog;
@@ -83,6 +84,7 @@ pub enum Action {
     SetTheme(ThemeChoice),
     SetScale(f32),
     SaveVolume,
+    SetAccent { hue: f32, persist: bool },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -142,7 +144,7 @@ impl SfxcApp {
         let worker = RenderWorker::spawn(move || ctx.request_repaint());
         let mut app = Self {
             ctx: cc.egui_ctx.clone(),
-            prefs: Prefs { theme: ThemeChoice::Auto, scale: 1.0, volume: audio::DEFAULT_VOLUME },
+            prefs: Prefs { theme: ThemeChoice::Auto, scale: 1.0, volume: audio::DEFAULT_VOLUME, accent_hue: accent::DEFAULT_HUE },
             db_path,
             store: None,
             store_error: None,
@@ -177,6 +179,7 @@ impl SfxcApp {
     fn apply_prefs(&self) {
         self.ctx.set_theme(self.prefs.theme.preference());
         self.ctx.set_zoom_factor(self.prefs.scale);
+        theme::set_accent(&self.ctx, self.prefs.accent_hue);
     }
 
     fn load_prefs(&mut self) {
@@ -189,6 +192,9 @@ impl SfxcApp {
         }
         if let Some(v) = store.setting("playback_volume").ok().flatten().and_then(|s| audio::parse_volume(&s)) {
             self.prefs.volume = v;
+        }
+        if let Some(h) = store.setting("accent_hue").ok().flatten().and_then(|s| accent::parse_hue(&s)) {
+            self.prefs.accent_hue = h;
         }
         self.player.set_volume(self.prefs.volume);
     }
@@ -561,6 +567,13 @@ impl SfxcApp {
                 self.prefs.scale = v;
                 self.apply_prefs();
                 self.save_pref("ui_scale", &v.to_string());
+            }
+            Action::SetAccent { hue, persist } => {
+                self.prefs.accent_hue = hue;
+                theme::set_accent(&self.ctx, hue);
+                if persist {
+                    self.save_pref("accent_hue", &hue.to_string());
+                }
             }
             Action::SaveVolume => {
                 let v = self.prefs.volume.to_string();
