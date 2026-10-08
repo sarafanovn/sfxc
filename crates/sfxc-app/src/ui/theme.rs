@@ -73,30 +73,30 @@ pub const DARK: Palette = Palette {
 };
 
 pub const LIGHT: Palette = Palette {
-    chrome: rgb(0xE8EBF0),
-    canvas: rgb(0xE8EBF0),
-    surface: rgb(0xE8EBF0),
-    raised: rgb(0xEDF0F4),
-    hover: rgb(0xF1F3F7),
-    well: rgb(0xDDE1E7),
-    knob: rgb(0xF3F5F8),
-    border: rgb(0xDDE1E7),
-    border_strong: rgb(0xCDD2DA),
-    text: rgb(0x1F232B),
-    muted: rgb(0x4E5561),
-    faint: rgb(0x5F6672),
-    accent: rgb(0x047857),
-    accent_hover: rgb(0x065F46),
-    on_accent: rgb(0xF7FFFB),
-    accent_soft: rgb(0xE3F4EC),
-    accent_text: rgb(0x065F46),
-    danger: rgb(0xDC2626),
-    danger_soft: rgb(0xFDECEC),
-    warn: rgb(0xB45309),
-    warn_soft: rgb(0xFDF3E1),
-    shadow: Color32::from_rgba_unmultiplied_const(60, 70, 90, 40),
-    shadow_light: Color32::from_rgba_unmultiplied_const(255, 255, 255, 210),
-    shadow_dark: Color32::from_rgba_unmultiplied_const(150, 162, 184, 150),
+    chrome: rgb(0xBDC0C5),
+    canvas: rgb(0xBDC0C5),
+    surface: rgb(0xBDC0C5),
+    raised: rgb(0xC3C6CB),
+    hover: rgb(0xC9CCD0),
+    well: rgb(0xB1B5BB),
+    knob: rgb(0xCACDD1),
+    border: rgb(0xB1B5BB),
+    border_strong: rgb(0xA2A7AF),
+    text: rgb(0x14171C),
+    muted: rgb(0x343A44),
+    faint: rgb(0x3F4651),
+    accent: rgb(0x046C4E),
+    accent_hover: rgb(0x055640),
+    on_accent: rgb(0xF2FBF7),
+    accent_soft: rgb(0xA9CBBC),
+    accent_text: rgb(0x04503B),
+    danger: rgb(0xA8191A),
+    danger_soft: rgb(0xD4B4B4),
+    warn: rgb(0x8A3F06),
+    warn_soft: rgb(0xD6C6A8),
+    shadow: Color32::from_rgba_unmultiplied_const(30, 36, 48, 50),
+    shadow_light: Color32::from_rgba_unmultiplied_const(255, 255, 255, 70),
+    shadow_dark: Color32::from_rgba_unmultiplied_const(100, 108, 124, 150),
 };
 
 struct AccentLevels {
@@ -108,7 +108,7 @@ struct AccentLevels {
 }
 
 const LIGHT_ACCENT: AccentLevels =
-    AccentLevels { accent: (0.50, 0.13), hover: (0.45, 0.13), on_accent: (0.99, 0.01), soft: (0.92, 0.03), text: (0.42, 0.11) };
+    AccentLevels { accent: (0.44, 0.12), hover: (0.39, 0.12), on_accent: (0.96, 0.01), soft: (0.76, 0.05), text: (0.32, 0.09) };
 const DARK_ACCENT: AccentLevels =
     AccentLevels { accent: (0.80, 0.13), hover: (0.86, 0.12), on_accent: (0.24, 0.05), soft: (0.33, 0.04), text: (0.84, 0.10) };
 
