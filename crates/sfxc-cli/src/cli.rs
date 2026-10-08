@@ -36,6 +36,50 @@ pub enum Command {
         #[arg(long)]
         patch: Option<String>,
     },
+    /// Nudge every parameter a little, like the app's Mutate button.
+    Mutate {
+        sound: String,
+        #[arg(long)]
+        seed: Option<u64>,
+    },
+    /// Set values by path, e.g. `layers.0.pitch.base_freq=880 master_volume=0.7`.
+    Set {
+        sound: String,
+        #[arg(required = true)]
+        assignments: Vec<String>,
+    },
+    /// Replace the whole patch with JSON from a file or `-` for stdin.
+    Put {
+        sound: String,
+        #[arg(long)]
+        patch: String,
+    },
+    /// Add or remove effects.
+    #[command(subcommand)]
+    Fx(FxCommand),
+    Rename { sound: String, name: String },
+    /// Replace the tags (space separated).
+    Tag { sound: String, tags: String },
+    Versions { sound: String },
+    /// Make an older version the current one; the current state is kept as a version first.
+    Restore { sound: String, version: i64 },
+}
+
+#[derive(Subcommand)]
+pub enum FxCommand {
+    /// Add an effect with default settings (master chain unless --layer). Prints its id and path.
+    Add {
+        sound: String,
+        /// Bitcrusher, Distortion, Phaser, Flanger, Delay, Reverb or Compressor.
+        kind: String,
+        #[arg(long)]
+        layer: Option<usize>,
+        /// Position in the chain; default is the end.
+        #[arg(long)]
+        at: Option<usize>,
+    },
+    /// Remove the effect with this id.
+    Remove { sound: String, id: u64 },
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]

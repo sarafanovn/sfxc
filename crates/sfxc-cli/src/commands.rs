@@ -2,12 +2,12 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
-use sfxc_core::generators::generate;
-use sfxc_core::patch::SoundPatch;
-use sfxc_core::patch_edit::unknown_keys;
+use sfxc_core::generators::{generate, mutate};
+use sfxc_core::patch::{Effect, EffectKind, SoundPatch};
+use sfxc_core::patch_edit::{apply_assignments, unknown_keys};
 use sfxc_store::Store;
 
-use crate::cli::Command;
+use crate::cli::{Command, FxCommand};
 
 pub struct Ctx {
     pub now: i64,
@@ -44,6 +44,64 @@ pub fn run(store: &Store, command: Command, ctx: &Ctx) -> Result<Value> {
             }
             attach_warnings(&mut out, warnings);
             Ok(out)
+        }
+        Command::Mutate { sound, seed } => {
+            let id = store.find_sound(&sound)?;
+            let patch = mutate(&store.load_draft(id)?, seed.unwrap_or(ctx.seed));
+            save(store, id, &patch, "mutate", ctx.now)?;
+            show(store, id)
+        }
+        Command::Set { sound, assignments } => {
+            let id = store.find_sound(&sound)?;
+            let (patch, finals) = apply_assignments(&store.load_draft(id)?, &assignments)?;
+            let version_id = save(store, id, &patch, "set", ctx.now)?;
+            let set: serde_json::Map<String, Value> = finals.into_iter().collect();
+            Ok(json!({ "id": id, "version_id": version_id, "set": set }))
+        }
+        Command::Put { sound, patch } => {
+            let id = store.find_sound(&sound)?;
+            let (patch, warnings) = parse_patch(&read_source(&patch, &ctx.cwd)?)?;
+            save(store, id, &patch, "put", ctx.now)?;
+            let mut out = show(store, id)?;
+            attach_warnings(&mut out, warnings);
+            Ok(out)
+        }
+        Command::Fx(FxCommand::Add { sound, kind, layer, at }) => fx_add(store, ctx, &sound, &kind, layer, at),
+        Command::Fx(FxCommand::Remove { sound, id: fx_id }) => {
+            let id = store.find_sound(&sound)?;
+            let mut patch = store.load_draft(id)?;
+            let ids = effect_ids(&patch);
+            if !ids.contains(&fx_id) {
+                let ids: Vec<String> = ids.iter().map(u64::to_string).collect();
+                bail!("no effect with id {fx_id}; ids: {}", if ids.is_empty() { "none".to_string() } else { ids.join(", ") });
+            }
+            patch.master_effects.retain(|e| e.id != fx_id);
+            for l in &mut patch.layers {
+                l.effects.retain(|e| e.id != fx_id);
+            }
+            save(store, id, &patch, "fx remove", ctx.now)?;
+            Ok(json!({ "id": id, "removed": fx_id }))
+        }
+        Command::Rename { sound, name } => {
+            let id = store.find_sound(&sound)?;
+            let name = name.trim();
+            ensure_name_free(store, name, Some(id))?;
+            store.rename_sound(id, name, ctx.now)?;
+            Ok(json!({ "id": id, "name": name }))
+        }
+        Command::Tag { sound, tags } => {
+            let id = store.find_sound(&sound)?;
+            store.set_tags(id, tags.trim(), ctx.now)?;
+            Ok(json!({ "id": id, "tags": tags.trim() }))
+        }
+        Command::Versions { sound } => versions_json(store, store.find_sound(&sound)?),
+        Command::Restore { sound, version } => {
+            let id = store.find_sound(&sound)?;
+            if store.version_owner(version)? != Some(id) {
+                bail!("version {version} is not a version of sound {id}; `sfxc-cli versions {id}` lists them");
+            }
+            store.restore_version(id, version, ctx.now)?;
+            show(store, id)
         }
     }
 }
@@ -106,6 +164,41 @@ pub(crate) fn parse_patch(text: &str) -> Result<(SoundPatch, Vec<String>)> {
     Ok((patch, warnings))
 }
 
+/// Saves `patch` as the draft and snapshots it. The note is set only when something changed, so a note a
+/// person wrote on the latest version is never replaced.
+pub(crate) fn save(store: &Store, id: i64, patch: &SoundPatch, command: &str, now: i64) -> Result<i64> {
+    store.save_draft(id, patch, now)?;
+    let note = if store.draft_differs_from_latest(id)? { format!("cli: {command}") } else { String::new() };
+    store.commit_version(id, &note, now)
+}
+
+fn effect_ids(patch: &SoundPatch) -> Vec<u64> {
+    patch.master_effects.iter().chain(patch.layers.iter().flat_map(|l| l.effects.iter())).map(|e| e.id).collect()
+}
+
+fn fx_add(store: &Store, ctx: &Ctx, sound: &str, name: &str, layer: Option<usize>, at: Option<usize>) -> Result<Value> {
+    let id = store.find_sound(sound)?;
+    let mut patch = store.load_draft(id)?;
+    let defaults = EffectKind::all_defaults();
+    let kind = defaults.iter().find(|k| k.name().eq_ignore_ascii_case(name.trim())).copied().with_context(|| {
+        let names: Vec<&str> = defaults.iter().map(|k| k.name()).collect();
+        format!("unknown effect `{name}`; one of: {}", names.join(", "))
+    })?;
+    let fx_id = patch.next_effect_id();
+    let layers = patch.layers.len();
+    let (chain, prefix) = match layer {
+        None => (&mut patch.master_effects, "master_effects".to_string()),
+        Some(l) => {
+            let layer = patch.layers.get_mut(l).with_context(|| format!("layer {l} does not exist (the sound has {layers})"))?;
+            (&mut layer.effects, format!("layers.{l}.effects"))
+        }
+    };
+    let at = at.unwrap_or(chain.len()).min(chain.len());
+    chain.insert(at, Effect { id: fx_id, enabled: true, kind });
+    let version_id = save(store, id, &patch, "fx add", ctx.now)?;
+    Ok(json!({ "id": id, "version_id": version_id, "effect_id": fx_id, "path": format!("{prefix}.{at}") }))
+}
+
 pub(crate) fn attach_warnings(out: &mut Value, warnings: Vec<String>) {
     if !warnings.is_empty() {
         out["warnings"] = json!(warnings);
@@ -115,7 +208,7 @@ pub(crate) fn attach_warnings(out: &mut Value, warnings: Vec<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli::{CategoryArg, ModeArg};
+    use crate::cli::{CategoryArg, FxCommand, ModeArg};
 
     pub(crate) fn temp_dir(name: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("sfxc-cli-{}-{name}", std::process::id()));
@@ -200,5 +293,93 @@ mod tests {
         let show = run(&s, Command::Show { sound: "jump".into() }, &ctx(&std::env::temp_dir())).unwrap();
         assert_eq!(show["versions"].as_array().unwrap().len(), 1);
         SoundPatch::from_json(&show["patch"].to_string()).unwrap();
+    }
+
+    fn set_cmd(sound: &str, a: &[&str]) -> Command {
+        Command::Set { sound: sound.into(), assignments: a.iter().map(|s| s.to_string()).collect() }
+    }
+
+    #[test]
+    fn every_edit_is_a_version_noted_with_its_command() {
+        let dir = temp_dir("edits");
+        let s = Store::open_in_memory().unwrap();
+        let c = ctx(&dir);
+        let id = new_jump(&s, &c, "jump");
+        run(&s, Command::Mutate { sound: "jump".into(), seed: Some(3) }, &c).unwrap();
+        run(&s, set_cmd("jump", &["master_volume=0.5"]), &c).unwrap();
+        std::fs::write(dir.join("p.json"), SoundPatch::default().to_json()).unwrap();
+        run(&s, Command::Put { sound: "jump".into(), patch: "p.json".into() }, &c).unwrap();
+        run(&s, Command::Fx(FxCommand::Add { sound: "jump".into(), kind: "reverb".into(), layer: None, at: None }), &c).unwrap();
+        assert_eq!(notes(&s, id), vec!["cli: fx add", "cli: put", "cli: set", "cli: mutate", "cli: new"]);
+    }
+
+    #[test]
+    fn a_no_op_set_keeps_a_persons_note() {
+        let s = Store::open_in_memory().unwrap();
+        let c = ctx(&std::env::temp_dir());
+        let id = new_jump(&s, &c, "jump");
+        run(&s, set_cmd("jump", &["master_volume=0.5"]), &c).unwrap();
+        s.commit_version(id, "final", 200).unwrap();
+        run(&s, set_cmd("jump", &["master_volume=0.5"]), &c).unwrap();
+        assert_eq!(notes(&s, id), vec!["final", "cli: new"]);
+    }
+
+    #[test]
+    fn set_reports_the_value_that_was_kept() {
+        let s = Store::open_in_memory().unwrap();
+        let c = ctx(&std::env::temp_dir());
+        new_jump(&s, &c, "jump");
+        let out = run(&s, set_cmd("jump", &["layers.0.pitch.base_freq=99999"]), &c).unwrap();
+        assert_eq!(out["set"]["layers.0.pitch.base_freq"], json!(5000.0));
+    }
+
+    #[test]
+    fn restore_adds_exactly_one_version_and_refuses_foreign_ones() {
+        let s = Store::open_in_memory().unwrap();
+        let c = ctx(&std::env::temp_dir());
+        let id = new_jump(&s, &c, "jump");
+        let other = new_jump(&s, &c, "other");
+        let first = s.current_version_id(id).unwrap().unwrap();
+        run(&s, set_cmd("jump", &["master_volume=0.3"]), &c).unwrap();
+        let before = s.list_versions(id).unwrap().len();
+        run(&s, Command::Restore { sound: "jump".into(), version: first }, &c).unwrap();
+        assert_eq!(s.list_versions(id).unwrap().len(), before, "the edited draft was already a version");
+        assert_eq!(s.current_version_id(id).unwrap(), Some(first));
+        let foreign = s.current_version_id(other).unwrap().unwrap();
+        let e = run(&s, Command::Restore { sound: "jump".into(), version: foreign }, &c).unwrap_err().to_string();
+        assert!(e.contains("not a version of"), "{e}");
+    }
+
+    #[test]
+    fn fx_add_gives_fresh_ids_and_remove_drops_one() {
+        let s = Store::open_in_memory().unwrap();
+        let c = ctx(&std::env::temp_dir());
+        let id = new_jump(&s, &c, "jump");
+        let add = |kind: &str, layer| Command::Fx(FxCommand::Add { sound: "jump".into(), kind: kind.into(), layer, at: None });
+        let a = run(&s, add("Delay", None), &c).unwrap();
+        let b = run(&s, add("bitcrusher", Some(0)), &c).unwrap();
+        assert_ne!(a["effect_id"], b["effect_id"]);
+        assert_eq!(a["path"], json!("master_effects.0"));
+        assert_eq!(b["path"], json!("layers.0.effects.0"));
+        let fx_id = a["effect_id"].as_u64().unwrap();
+        run(&s, Command::Fx(FxCommand::Remove { sound: "jump".into(), id: fx_id }), &c).unwrap();
+        let p = s.load_draft(id).unwrap();
+        assert!(p.master_effects.is_empty() && p.layers[0].effects.len() == 1);
+        assert!(run(&s, Command::Fx(FxCommand::Remove { sound: "jump".into(), id: fx_id }), &c).is_err());
+        let e = run(&s, add("Chorus", None), &c).unwrap_err().to_string();
+        assert!(e.contains("Reverb"), "{e}");
+        assert!(run(&s, add("Delay", Some(3)), &c).is_err());
+    }
+
+    #[test]
+    fn rename_keeps_names_unique() {
+        let s = Store::open_in_memory().unwrap();
+        let c = ctx(&std::env::temp_dir());
+        new_jump(&s, &c, "a");
+        new_jump(&s, &c, "b");
+        assert!(run(&s, Command::Rename { sound: "b".into(), name: "a".into() }, &c).is_err());
+        run(&s, Command::Rename { sound: "b".into(), name: "b".into() }, &c).unwrap();
+        run(&s, Command::Rename { sound: "b".into(), name: "c".into() }, &c).unwrap();
+        assert!(s.find_sound("c").is_ok());
     }
 }
