@@ -8,7 +8,7 @@ use super::theme::{self, palette};
 use super::widgets::{
     banner, row_label, button, icon_button, material_card, param, play_button, section, segmented, toggle, waveform, Kind, Tone,
 };
-use super::{controls, effects, Action, Current};
+use super::{arp, controls, effects, Action, Current};
 
 /// Read-only state the editor shows but does not own.
 pub struct View<'a> {
@@ -50,6 +50,7 @@ pub fn show(
             let layer = &mut cur.patch.layers[0];
             source_section(ui, layer, mode);
             pitch_section(ui, layer);
+            arp_section(ui, layer, view);
             envelope_section(ui, layer);
             filter_section(ui, layer);
             output_section(ui, &mut cur.patch);
@@ -288,6 +289,55 @@ fn pitch_section(ui: &mut Ui, layer: &mut Layer) {
         param(ui, "Vibrato depth", &mut p.vibrato_depth, ranges::VIBRATO_DEPTH, 0.0, " st", false);
         param(ui, "Vibrato rate", &mut p.vibrato_rate, ranges::VIBRATO_RATE, d.vibrato_rate, " Hz", false);
     });
+}
+
+fn arp_section(ui: &mut Ui, layer: &mut Layer, view: &View) {
+    let d = Pitch::default();
+    let sound_secs = sfxc_core::env::length(&layer.env);
+    let pitch = &mut layer.pitch;
+    let mut enabled = pitch.arp_enabled;
+    // The header toggle owns `enabled` while the section draws; the body reads this copy.
+    let body_enabled = enabled;
+    section(ui, "arp", "Arpeggio", |ui| {
+        toggle(ui, &mut enabled, "").on_hover_text(if body_enabled { "Turn arpeggio off" } else { "Turn arpeggio on" });
+    }, |ui| {
+        ui.add_enabled_ui(body_enabled, |ui| {
+            let rendered_secs = view.rendered.map_or(sound_secs, |(s, sr)| s.len() as f32 / sr as f32);
+            let playing = view.progress.and_then(|t| arp::playing_step(t, rendered_secs, pitch.arp_speed, pitch.arp_steps.len()));
+            ui.horizontal(|ui| {
+                if !pitch.arp_steps.is_empty() {
+                    arp::bars(ui, &mut pitch.arp_steps, playing);
+                }
+                ui.vertical(|ui| {
+                    if pitch.arp_steps.len() < MAX_ARP_STEPS && icon_button(ui, icon::PLUS, "Add step").clicked() {
+                        arp::add_step(&mut pitch.arp_steps);
+                    }
+                    if !pitch.arp_steps.is_empty() && icon_button(ui, icon::MINUS, "Remove last step").clicked() {
+                        pitch.arp_steps.pop();
+                    }
+                });
+            });
+            ui.add_space(6.0);
+            ui.horizontal_wrapped(|ui| {
+                for (name, steps) in arp::PRESETS {
+                    if button(ui, Kind::Ghost, None, name).clicked() {
+                        pitch.arp_steps = steps.to_vec();
+                    }
+                }
+            });
+            if !pitch.arp_steps.is_empty() {
+                ui.add_space(4.0);
+                param(ui, "Step", &mut pitch.arp_speed, ranges::ARP_SPEED, d.arp_speed, " s", true);
+                let fit = arp::steps_that_fit(sound_secs, pitch.arp_speed);
+                if fit < 2 {
+                    banner(ui, Tone::Warn, icon::WARNING, "Only the first step plays: shorten Step or lengthen the envelope.", false);
+                } else {
+                    ui.label(super::widgets::hint(ui, format!("{fit} steps fit into the sound")));
+                }
+            }
+        });
+    });
+    pitch.arp_enabled = enabled;
 }
 
 fn envelope_section(ui: &mut Ui, layer: &mut Layer) {

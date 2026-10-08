@@ -1,6 +1,7 @@
 //! Main window: wires store, renderer, player and the panels together.
 
 mod accent;
+mod arp;
 mod controls;
 mod editor;
 mod effects;
