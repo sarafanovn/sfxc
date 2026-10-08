@@ -14,6 +14,13 @@ pub const R_CONTROL: u8 = 6;
 pub const R_CARD: u8 = 10;
 pub const R_DIALOG: u8 = 14;
 
+/// Motion timings in seconds; set to 0 to disable animation.
+pub const T_HOVER: f32 = 0.15;
+pub const T_PRESS: f32 = 0.08;
+pub const T_RELEASE: f32 = 0.25;
+/// Distance in points at which controls start reacting to the pointer.
+pub const PROXIMITY: f32 = 60.0;
+
 /// Semantic colors. Code outside this module never uses raw hex values.
 #[derive(Clone, Copy)]
 pub struct Palette {
@@ -48,6 +55,10 @@ pub struct Palette {
     pub warn: Color32,
     pub warn_soft: Color32,
     pub shadow: Color32,
+    /// Highlight side of soft relief (top-left).
+    pub shadow_light: Color32,
+    /// Shade side of soft relief (bottom-right).
+    pub shadow_dark: Color32,
 }
 
 const fn rgb(hex: u32) -> Color32 {
@@ -55,18 +66,18 @@ const fn rgb(hex: u32) -> Color32 {
 }
 
 pub const DARK: Palette = Palette {
-    chrome: rgb(0x0E0E10),
-    canvas: rgb(0x141416),
-    surface: rgb(0x1A1A1D),
-    raised: rgb(0x232327),
-    hover: rgb(0x2C2C31),
-    well: rgb(0x111113),
-    knob: rgb(0x2E2E34),
-    border: rgb(0x26262B),
-    border_strong: rgb(0x3A3A41),
-    text: rgb(0xEDEDF0),
-    muted: rgb(0xA1A1AA),
-    faint: rgb(0x8A8A94),
+    chrome: rgb(0x1E2024),
+    canvas: rgb(0x25272C),
+    surface: rgb(0x25272C),
+    raised: rgb(0x2B2E34),
+    hover: rgb(0x31343B),
+    well: rgb(0x1D1F23),
+    knob: rgb(0x33363D),
+    border: rgb(0x2E3137),
+    border_strong: rgb(0x3A3E46),
+    text: rgb(0xE9EBEF),
+    muted: rgb(0xA9AEB8),
+    faint: rgb(0x8E949F),
     accent: rgb(0x34D399),
     accent_hover: rgb(0x5EDDB0),
     on_accent: rgb(0x04291C),
@@ -76,22 +87,24 @@ pub const DARK: Palette = Palette {
     danger_soft: rgb(0x3A1D1F),
     warn: rgb(0xFBBF24),
     warn_soft: rgb(0x3A2E14),
-    shadow: Color32::from_black_alpha(110),
+    shadow: Color32::from_black_alpha(120),
+    shadow_light: Color32::from_rgba_unmultiplied_const(255, 255, 255, 14),
+    shadow_dark: Color32::from_black_alpha(150),
 };
 
 pub const LIGHT: Palette = Palette {
-    chrome: rgb(0xF4F4F5),
-    canvas: rgb(0xFAFAFA),
-    surface: rgb(0xFFFFFF),
-    raised: rgb(0xF3F3F5),
-    hover: rgb(0xE8E8EB),
-    well: rgb(0xEBEBEE),
-    knob: rgb(0xFFFFFF),
-    border: rgb(0xE4E4E7),
-    border_strong: rgb(0xD4D4D8),
-    text: rgb(0x18181B),
-    muted: rgb(0x52525B),
-    faint: rgb(0x71717A),
+    chrome: rgb(0xE1E4EA),
+    canvas: rgb(0xE8EBF0),
+    surface: rgb(0xE8EBF0),
+    raised: rgb(0xEDF0F4),
+    hover: rgb(0xF1F3F7),
+    well: rgb(0xDDE1E7),
+    knob: rgb(0xF3F5F8),
+    border: rgb(0xDDE1E7),
+    border_strong: rgb(0xCDD2DA),
+    text: rgb(0x1F232B),
+    muted: rgb(0x4E5561),
+    faint: rgb(0x5F6672),
     accent: rgb(0x047857),
     accent_hover: rgb(0x065F46),
     on_accent: rgb(0xF7FFFB),
@@ -101,7 +114,9 @@ pub const LIGHT: Palette = Palette {
     danger_soft: rgb(0xFDECEC),
     warn: rgb(0xB45309),
     warn_soft: rgb(0xFDF3E1),
-    shadow: Color32::from_rgba_unmultiplied_const(24, 24, 27, 28),
+    shadow: Color32::from_rgba_unmultiplied_const(60, 70, 90, 40),
+    shadow_light: Color32::from_rgba_unmultiplied_const(255, 255, 255, 210),
+    shadow_dark: Color32::from_rgba_unmultiplied_const(150, 162, 184, 150),
 };
 
 /// OKLCH lightness and chroma of each accent role; the hue comes from the user.
@@ -277,7 +292,7 @@ fn visuals(p: &Palette, dark: bool) -> Visuals {
     let control = CornerRadius::same(R_CONTROL);
     v.panel_fill = p.chrome;
     v.window_fill = p.surface;
-    v.window_stroke = Stroke::new(1.0, p.border);
+    v.window_stroke = Stroke::NONE;
     v.window_corner_radius = CornerRadius::same(R_DIALOG);
     v.window_shadow = Shadow { offset: [0, 12], blur: 36, spread: 0, color: p.shadow };
     v.popup_shadow = Shadow { offset: [0, 6], blur: 18, spread: 0, color: p.shadow };
@@ -301,19 +316,19 @@ fn visuals(p: &Palette, dark: bool) -> Visuals {
     let w = &mut v.widgets;
     w.noninteractive.bg_fill = p.surface;
     w.noninteractive.weak_bg_fill = p.surface;
-    w.noninteractive.bg_stroke = Stroke::new(1.0, p.border);
+    w.noninteractive.bg_stroke = Stroke::NONE;
     w.noninteractive.fg_stroke = Stroke::new(1.0, p.text);
     w.inactive.bg_fill = p.hover;
     w.inactive.weak_bg_fill = p.raised;
-    w.inactive.bg_stroke = Stroke::new(1.0, p.border);
+    w.inactive.bg_stroke = Stroke::NONE;
     w.inactive.fg_stroke = Stroke::new(1.5, p.text);
     w.hovered.bg_fill = p.border_strong;
     w.hovered.weak_bg_fill = p.hover;
-    w.hovered.bg_stroke = Stroke::new(1.0, p.border_strong);
+    w.hovered.bg_stroke = Stroke::NONE;
     w.hovered.fg_stroke = Stroke::new(1.5, p.text);
     w.active.bg_fill = p.border_strong;
     w.active.weak_bg_fill = p.border_strong;
-    w.active.bg_stroke = Stroke::new(1.0, p.border_strong);
+    w.active.bg_stroke = Stroke::NONE;
     w.active.fg_stroke = Stroke::new(1.5, p.text);
     w.open = w.hovered;
     for wv in [&mut w.noninteractive, &mut w.inactive, &mut w.hovered, &mut w.active, &mut w.open] {

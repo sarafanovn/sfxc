@@ -6,7 +6,7 @@ use sfxc_core::patch::*;
 
 use super::theme::{self, palette};
 use super::widgets::{
-    accent_slider, banner, row_label, button, card, card_frame, icon_button, param, play_button, segmented, toggle, waveform, Kind, Tone,
+    accent_slider, banner, row_label, button, card, icon_button, material_card, param, play_button, segmented, toggle, waveform, Kind, Tone,
 };
 use super::{effects, Action, Current};
 
@@ -123,7 +123,7 @@ fn header(ui: &mut Ui, cur: &mut Current, view: &View, actions: &mut Vec<Action>
 }
 
 fn transport(ui: &mut Ui, cur: &mut Current, view: &View, autoplay: &mut bool, volume: &mut f32, mode_note: &mut Option<String>, actions: &mut Vec<Action>) {
-    card_frame(ui).show(ui, |ui| {
+    material_card(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {
             ui.vertical(|ui| {

@@ -2,12 +2,13 @@
 
 use eframe::egui::{
     self, Align, Align2, Color32, CornerRadius, CursorIcon, FontId, Frame, Layout, Margin, Pos2, Rect, Response, RichText,
-    Sense, Shape, Stroke, StrokeKind, TextStyle, Ui, Vec2, WidgetText,
+    Sense, Shadow, Shape, Stroke, TextStyle, Ui, Vec2, WidgetText,
 };
 use egui_phosphor::regular as icon;
 use eframe::egui::emath::Numeric;
 use sfxc_core::patch::Range;
 
+use super::material::{self, Motion};
 use super::theme::{self, palette, Palette, R_CARD, R_CONTROL};
 
 const LABEL_W: f32 = 104.0;
@@ -87,7 +88,7 @@ pub enum Kind {
     Danger,
 }
 
-/// Button with optional leading icon. Presses sink by one pixel.
+/// Button with optional leading icon. Bulges on hover and sinks on press.
 pub fn button(ui: &mut Ui, kind: Kind, icon: Option<&str>, text: &str) -> Response {
     let p = palette(ui);
     let fg = |hovered: bool| match kind {
@@ -108,21 +109,24 @@ pub fn button(ui: &mut Ui, kind: Kind, icon: Option<&str>, text: &str) -> Respon
     let size = (galley.size() + pad * 2.0).max(Vec2::new(26.0, 28.0));
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
     if ui.is_rect_visible(rect) {
-        let hovered = resp.hovered() && ui.is_enabled();
-        let pressed = resp.is_pointer_button_down_on();
-        let (fill, stroke) = match kind {
-            Kind::Primary => (if hovered { p.accent_hover } else { p.accent }, Stroke::NONE),
-            Kind::Danger => (if hovered { p.danger.gamma_multiply(0.9) } else { p.danger }, Stroke::NONE),
-            Kind::Secondary => (
-                if hovered { p.hover } else { p.raised },
-                Stroke::new(1.0, if hovered { p.border_strong } else { p.border }),
-            ),
-            Kind::Ghost => (if hovered { p.hover } else { Color32::TRANSPARENT }, Stroke::NONE),
-        };
-        let rect = rect.translate(Vec2::new(0.0, if pressed { 1.0 } else { 0.0 }));
+        let m = Motion::of(ui, &resp);
         let painter = ui.painter();
-        painter.rect(rect, R_CONTROL, fill, stroke, StrokeKind::Inside);
-        painter.galley(rect.center() - galley.size() / 2.0, galley, fg(hovered));
+        match kind {
+            Kind::Secondary => material::raised(painter, rect, R_CONTROL as f32, &p, &m),
+            Kind::Ghost => {
+                if m.hover > 0.0 {
+                    material::raised(painter, rect, R_CONTROL as f32, &p, &Motion { near: 0.0, ..m });
+                }
+            }
+            Kind::Primary | Kind::Danger => {
+                let base = if kind == Kind::Primary { p.accent } else { p.danger };
+                let fill = base.lerp_to_gamma(if kind == Kind::Primary { p.accent_hover } else { Color32::BLACK }, 0.15 * m.hover);
+                material::raised(painter, rect, R_CONTROL as f32, &Palette { raised: fill, ..p }, &m);
+            }
+        }
+        let hovered = m.hover > 0.5;
+        let offset = Vec2::splat(m.press.clamp(0.0, 1.0));
+        painter.galley(rect.center() - galley.size() / 2.0 + offset, galley, fg(hovered));
     }
     if ui.is_enabled() { resp.on_hover_cursor(CursorIcon::PointingHand) } else { resp }
 }
@@ -142,7 +146,7 @@ pub fn segmented<T: PartialEq + Copy>(ui: &mut Ui, value: &mut T, options: &[(T,
     let widths: Vec<f32> = galleys.iter().map(|g| g.size().x + 20.0).collect();
     let size = Vec2::new(widths.iter().sum::<f32>() + inset * 2.0, 28.0);
     let (rect, base) = ui.allocate_exact_size(size, Sense::hover());
-    ui.painter().rect_filled(rect, R_CONTROL, p.well);
+    material::recessed(ui.painter(), rect, R_CONTROL as f32, &p, 0.6);
     let mut x = rect.left() + inset;
     let mut changed = false;
     for (i, (((opt, _), galley), w)) in options.iter().zip(galleys).zip(widths).enumerate() {
@@ -155,7 +159,8 @@ pub fn segmented<T: PartialEq + Copy>(ui: &mut Ui, value: &mut T, options: &[(T,
             changed = true;
         }
         if selected {
-            ui.painter().rect(seg, R_CONTROL - 1, p.knob, Stroke::new(1.0, p.border), StrokeKind::Inside);
+            let m = Motion::of(ui, &resp);
+            material::raised(ui.painter(), seg, (R_CONTROL - 1) as f32, &Palette { raised: p.knob, ..p }, &m);
         } else if resp.hovered() {
             ui.painter().rect_filled(seg, R_CONTROL - 1, p.hover.gamma_multiply(0.6));
         }
@@ -179,14 +184,14 @@ pub fn toggle(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
     }
     let t = ui.ctx().animate_bool_responsive(resp.id, *on);
     let track_rect = Rect::from_min_size(Pos2::new(rect.left(), rect.center().y - track.y / 2.0), track);
-    let off = if resp.hovered() { p.border_strong } else { p.hover };
-    let fill = lerp_color(off, p.accent, t);
+    let m = Motion::of(ui, &resp);
     let painter = ui.painter();
-    painter.rect_filled(track_rect, track.y / 2.0, fill);
+    material::recessed(painter, track_rect, track.y / 2.0, &p, 0.7);
+    painter.rect_filled(track_rect, track.y / 2.0, p.accent.gamma_multiply(t));
     let r = track.y / 2.0 - 2.0;
     let cx = egui::lerp(track_rect.left() + r + 2.0..=track_rect.right() - r - 2.0, t);
-    let knob = if ui.visuals().dark_mode { Color32::from_gray(244) } else { Color32::WHITE };
-    painter.circle_filled(Pos2::new(cx, track_rect.center().y), r, knob);
+    let knob = Rect::from_center_size(Pos2::new(cx, track_rect.center().y), Vec2::splat(r * 2.0));
+    material::raised(painter, knob, r, &Palette { raised: p.knob, ..p }, &m);
     if let Some(g) = galley {
         let pos = Pos2::new(track_rect.right() + 8.0, rect.center().y - g.size().y / 2.0);
         painter.galley(pos, g, p.text);
@@ -194,23 +199,31 @@ pub fn toggle(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
     resp.on_hover_cursor(CursorIcon::PointingHand)
 }
 
-fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
-    let l = |x: u8, y: u8| egui::lerp(x as f32..=y as f32, t).round() as u8;
-    Color32::from_rgb(l(a.r(), b.r()), l(a.g(), b.g()), l(a.b(), b.b()))
+pub fn card_frame(_ui: &Ui) -> Frame {
+    Frame::new().corner_radius(R_CARD).inner_margin(Margin::same(14))
 }
 
-pub fn card_frame(ui: &Ui) -> Frame {
+/// Frame content on a raised card. Shadows are painted under the content after layout.
+pub fn material_card<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     let p = palette(ui);
-    Frame::new()
-        .fill(p.surface)
-        .stroke(Stroke::new(1.0, p.border))
-        .corner_radius(R_CARD)
-        .inner_margin(Margin::same(14))
+    let under = ui.painter().add(Shape::Noop);
+    let inner = card_frame(ui).show(ui, add);
+    let rect = inner.response.rect;
+    let m = Motion { pointer: None, ..Motion::of(ui, &ui.interact(rect, inner.response.id.with("card"), Sense::hover())) };
+    let painter = ui.painter().clone();
+    let mut shapes = Vec::new();
+    let e = 0.6 + 0.2 * m.near;
+    let d = (5.0 * e) as i8;
+    shapes.push(Shape::from(Shadow { offset: [-d, -d], blur: 16, spread: 0, color: p.shadow_light }.as_shape(rect, R_CARD)));
+    shapes.push(Shape::from(Shadow { offset: [d, d], blur: 16, spread: 0, color: p.shadow_dark }.as_shape(rect, R_CARD)));
+    shapes.push(Shape::rect_filled(rect, R_CARD, p.surface));
+    painter.set(under, Shape::Vec(shapes));
+    inner.inner
 }
 
 /// Card with a title row; `trailing` adds widgets at the right of the title.
 pub fn card(ui: &mut Ui, title: &str, trailing: impl FnOnce(&mut Ui), add: impl FnOnce(&mut Ui)) {
-    card_frame(ui).show(ui, |ui| {
+    material_card(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {
             ui.label(RichText::new(title).font(FontId::new(13.5, theme::semibold())).color(palette(ui).text));
@@ -219,7 +232,7 @@ pub fn card(ui: &mut Ui, title: &str, trailing: impl FnOnce(&mut Ui), add: impl 
         ui.add_space(6.0);
         add(ui);
     });
-    ui.add_space(10.0);
+    ui.add_space(14.0);
 }
 
 pub fn panel_header(ui: &mut Ui, title: &str, trailing: impl FnOnce(&mut Ui)) {
@@ -301,7 +314,7 @@ pub fn search_field(ui: &mut Ui, text: &mut String, hint: &str) -> Response {
     let p = palette(ui);
     Frame::new()
         .fill(p.well)
-        .stroke(Stroke::new(1.0, p.border))
+        .stroke(Stroke::NONE)
         .corner_radius(R_CONTROL)
         .inner_margin(Margin::symmetric(8, 3))
         .show(ui, |ui| {
@@ -344,11 +357,10 @@ pub fn hint(ui: &Ui, text: impl Into<String>) -> WidgetText {
 pub fn play_button(ui: &mut Ui, playing: bool) -> Response {
     let p = palette(ui);
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(48.0), Sense::click());
-    let hovered = resp.hovered();
-    let pressed = resp.is_pointer_button_down_on();
-    let c = rect.center() + Vec2::new(0.0, if pressed { 1.0 } else { 0.0 });
-    let fill = if hovered { p.accent_hover } else { p.accent };
-    ui.painter().circle_filled(c, 22.0, fill);
+    let m = Motion::of(ui, &resp);
+    let c = rect.center() + Vec2::splat(m.press.clamp(0.0, 1.0));
+    let fill = p.accent.lerp_to_gamma(p.accent_hover, m.hover);
+    material::raised(ui.painter(), Rect::from_center_size(rect.center(), Vec2::splat(44.0)), 22.0, &Palette { raised: fill, ..p }, &m);
     let glyph = if playing { egui_phosphor::fill::WAVEFORM } else { egui_phosphor::fill::PLAY };
     let offset = if playing { Vec2::ZERO } else { Vec2::new(1.5, 0.0) };
     ui.painter().text(c + offset, Align2::CENTER_CENTER, glyph, FontId::new(20.0, theme::icon_fill()), p.on_accent);
@@ -360,7 +372,7 @@ pub fn waveform(ui: &mut Ui, rendered: Option<(&[f32], u32)>, progress: Option<f
     let p = palette(ui);
     let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), height), Sense::hover());
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, R_CONTROL, p.well);
+    material::recessed(&painter, rect, R_CONTROL as f32, &p, 0.8);
     let mid = rect.center().y;
     painter.hline(rect.x_range().shrink(8.0), mid, Stroke::new(1.0, p.border));
     let Some((samples, sample_rate)) = rendered.filter(|(s, _)| !s.is_empty()) else {

@@ -5,6 +5,7 @@ mod editor;
 mod effects;
 mod export_dialog;
 mod library;
+mod material;
 mod theme;
 mod versions;
 mod widgets;
@@ -809,7 +810,7 @@ impl SfxcApp {
             ui.add_space((ui.available_height() / 2.0 - 160.0).max(24.0));
             ui.vertical_centered(|ui| {
                 ui.set_max_width(460.0);
-                widgets::card_frame(ui).inner_margin(egui::Margin::same(24)).show(ui, |ui| {
+                widgets::material_card(ui, |ui| {
                     ui.set_width(ui.available_width());
                     widgets::banner(ui, widgets::Tone::Danger, egui_phosphor::regular::DATABASE, "Could not open the sound library", false);
                     ui.add_space(12.0);

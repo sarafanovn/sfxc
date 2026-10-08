@@ -3,7 +3,7 @@ use egui_phosphor::regular as icon;
 use sfxc_core::patch::{ranges::*, DistortionKind, Effect, EffectKind};
 
 use super::theme::{self, palette};
-use super::widgets::{button, card_frame, empty_state, icon_button, param, param_num, segmented, toggle, Kind};
+use super::widgets::{button, card_frame, empty_state, material_card, icon_button, param, param_num, segmented, toggle, Kind};
 
 pub fn show(ui: &mut egui::Ui, effects: &mut Vec<Effect>, next_id: u64) {
     let p = palette(ui);
@@ -20,7 +20,7 @@ pub fn show(ui: &mut egui::Ui, effects: &mut Vec<Effect>, next_id: u64) {
     });
     ui.add_space(6.0);
     if effects.is_empty() {
-        card_frame(ui).show(ui, |ui| {
+        material_card(ui, |ui| {
             ui.set_width(ui.available_width());
             empty_state(ui, icon::FADERS, "No effects", "Add reverb, delay or a bitcrusher to shape the sound.", |_| {});
         });
@@ -34,7 +34,7 @@ pub fn show(ui: &mut egui::Ui, effects: &mut Vec<Effect>, next_id: u64) {
         let id = effect.id;
         let open_id = Id::new(("fx_open", id));
         let mut open = ui.data(|d| d.get_temp::<bool>(open_id)).unwrap_or(true);
-        let row = card_frame(ui).inner_margin(egui::Margin::symmetric(12, 10)).show(ui, |ui| {
+        let row = card_frame(ui).fill(p.raised).inner_margin(egui::Margin::symmetric(12, 10)).show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
                 ui.dnd_drag_source(Id::new(("fx_drag", id)), i, |ui| {
