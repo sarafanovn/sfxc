@@ -3177,12 +3177,11 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "cpal",
- "directories",
  "eframe",
  "egui-phosphor",
  "rfd",
- "rusqlite",
  "sfxc-core",
+ "sfxc-store",
 ]
 
 [[package]]
@@ -3196,6 +3195,18 @@ dependencies = [
  "serde",
  "serde_json",
  "vorbis_rs",
+]
+
+[[package]]
+name = "sfxc-store"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "directories",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sfxc-core",
 ]
 
 [[package]]

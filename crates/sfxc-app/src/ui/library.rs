@@ -6,7 +6,7 @@ use super::theme::{palette, ThemeChoice, UI_SCALES};
 use super::widgets::{self, age, button, empty_state, icon_button, search_field, segmented, Kind};
 use super::theme::R_CONTROL;
 use super::Action;
-use crate::store::SoundSummary;
+use sfxc_store::SoundSummary;
 
 const ROW_H: f32 = 46.0;
 

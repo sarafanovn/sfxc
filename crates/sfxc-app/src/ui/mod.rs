@@ -25,7 +25,7 @@ use sfxc_core::patch::{Mode, SoundPatch};
 use crate::audio::{self, Player};
 use crate::history::History;
 use crate::render_worker::{RenderJob, RenderResult, RenderWorker};
-use crate::store::{SoundSummary, Store, VersionInfo};
+use sfxc_store::{SoundSummary, Store, VersionInfo};
 use export_dialog::ExportDialog;
 use library::Prefs;
 use theme::ThemeChoice;

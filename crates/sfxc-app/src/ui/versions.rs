@@ -4,7 +4,7 @@ use egui_phosphor::regular as icon;
 use super::theme::{self, palette};
 use super::widgets::{self, age, badge, empty_state, icon_button, Tone};
 use super::Action;
-use crate::store::VersionInfo;
+use sfxc_store::VersionInfo;
 
 const GUTTER: f32 = 22.0;
 

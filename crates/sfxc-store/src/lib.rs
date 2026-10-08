@@ -1,6 +1,9 @@
-use std::path::Path;
+//! SQLite library shared by the app and the CLI: sounds with an autosaved draft and an append-only version history.
+
+use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
+use directories::ProjectDirs;
 use rusqlite::{params, Connection, OptionalExtension};
 use sfxc_core::patch::SoundPatch;
 
@@ -64,7 +67,6 @@ impl Store {
         Self::init(conn)
     }
 
-    #[cfg(test)]
     pub fn open_in_memory() -> Result<Self> {
         Self::init(Connection::open_in_memory()?)
     }
@@ -285,6 +287,16 @@ impl Store {
     }
 }
 
+/// `~/Library/Application Support/sfxc/library.db` on macOS; `SFXC_LIBRARY` overrides it.
+pub fn library_path() -> PathBuf {
+    if let Some(path) = std::env::var_os("SFXC_LIBRARY") {
+        return PathBuf::from(path);
+    }
+    ProjectDirs::from("", "", "sfxc")
+        .map(|d| d.data_dir().join("library.db"))
+        .unwrap_or_else(|| PathBuf::from("library.db"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -448,5 +460,22 @@ mod tests {
         s.set_setting("theme", "dark").unwrap();
         s.set_setting("theme", "light").unwrap();
         assert_eq!(s.setting("theme").unwrap().as_deref(), Some("light"));
+    }
+
+    #[test]
+    fn write_waits_for_another_connections_lock() {
+        let path = temp_db("busy");
+        let gui = Store::open(&path).unwrap();
+        let cli = Store::open(&path).unwrap();
+        gui.conn.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            gui.conn.execute_batch("COMMIT").unwrap();
+            gui
+        });
+        cli.create_sound("from cli", &patch(300.0), 1).expect("busy_timeout should wait for the lock");
+        drop(release.join().unwrap());
+        drop(cli);
+        let _ = std::fs::remove_file(&path);
     }
 }

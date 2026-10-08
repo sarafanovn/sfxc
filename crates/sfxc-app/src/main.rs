@@ -1,22 +1,9 @@
 mod audio;
 mod history;
 mod render_worker;
-mod store;
 mod ui;
 
-use std::path::PathBuf;
-
-use directories::ProjectDirs;
 use eframe::egui;
-
-fn library_path() -> PathBuf {
-    if let Some(path) = std::env::var_os("SFXC_LIBRARY") {
-        return PathBuf::from(path);
-    }
-    ProjectDirs::from("", "", "sfxc")
-        .map(|d| d.data_dir().join("library.db"))
-        .unwrap_or_else(|| PathBuf::from("library.db"))
-}
 
 fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
@@ -30,5 +17,5 @@ fn main() -> eframe::Result {
             .with_icon(eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon.png")).expect("bundled icon is a valid PNG")),
         ..Default::default()
     };
-    eframe::run_native("sfxc", options, Box::new(|cc| Ok(Box::new(ui::SfxcApp::new(cc, library_path())))))
+    eframe::run_native("sfxc", options, Box::new(|cc| Ok(Box::new(ui::SfxcApp::new(cc, sfxc_store::library_path())))))
 }

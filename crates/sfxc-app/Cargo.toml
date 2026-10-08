@@ -9,10 +9,9 @@ path = "src/main.rs"
 
 [dependencies]
 sfxc-core = { path = "../sfxc-core" }
+sfxc-store = { path = "../sfxc-store" }
 anyhow = "1"
 eframe = "0.36"
 cpal = "0.18"
-rusqlite = { version = "0.40", features = ["bundled"] }
 rfd = "0.17"
-directories = "6"
 egui-phosphor = { version = "0.14", features = ["regular", "fill"] }
