@@ -215,6 +215,8 @@ pub struct Pitch {
     pub arp_steps: Vec<i8>,
     /// Seconds per arpeggio step.
     pub arp_speed: f32,
+    /// When false, `arp_steps` are kept but not played.
+    pub arp_enabled: bool,
 }
 
 impl Default for Pitch {
@@ -227,6 +229,7 @@ impl Default for Pitch {
             vibrato_rate: 6.0,
             arp_steps: Vec::new(),
             arp_speed: 0.1,
+            arp_enabled: true,
         }
     }
 }
@@ -574,6 +577,14 @@ mod tests {
         let p = SoundPatch::default();
         let back = SoundPatch::from_json(&p.to_json()).unwrap();
         assert_eq!(p, back);
+    }
+
+    #[test]
+    fn old_patch_without_arp_enabled_keeps_arp_on() {
+        let mut v: serde_json::Value = serde_json::from_str(&SoundPatch::default().to_json()).unwrap();
+        v["layers"][0]["pitch"].as_object_mut().unwrap().remove("arp_enabled");
+        let p = SoundPatch::from_json(&v.to_string()).unwrap();
+        assert!(p.layers[0].pitch.arp_enabled);
     }
 
     #[test]

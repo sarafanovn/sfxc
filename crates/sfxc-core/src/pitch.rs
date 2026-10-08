@@ -17,7 +17,7 @@ pub fn freq_at(p: &Pitch, mode: Mode, t: f32, sample_rate: f32) -> f32 {
     if p.vibrato_depth > 0.0 {
         semis += p.vibrato_depth * (TAU * p.vibrato_rate * t).sin();
     }
-    if !p.arp_steps.is_empty() {
+    if p.arp_enabled && !p.arp_steps.is_empty() {
         let idx = (t / p.arp_speed.max(0.001)) as usize % p.arp_steps.len();
         semis += p.arp_steps[idx] as f32;
     }
@@ -49,6 +49,12 @@ mod tests {
         assert!((freq_at(&p, Mode::Modern, 0.05, SR) - 440.0).abs() < 0.01);
         assert!((freq_at(&p, Mode::Modern, 0.15, SR) - 880.0).abs() < 0.01);
         assert!((freq_at(&p, Mode::Modern, 0.25, SR) - 440.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn disabled_arpeggio_is_ignored() {
+        let p = Pitch { arp_steps: vec![0, 12], arp_speed: 0.1, arp_enabled: false, ..Default::default() };
+        assert!((freq_at(&p, Mode::Modern, 0.15, SR) - 440.0).abs() < 0.01);
     }
 
     #[test]

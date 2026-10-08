@@ -268,6 +268,17 @@ mod tests {
     use crate::render::render;
 
     #[test]
+    fn generate_uses_default_gain_and_enabled_arp() {
+        for c in Category::ALL {
+            for seed in 0..20 {
+                let p = generate(c, Mode::Modern, seed);
+                assert_eq!(p.master_volume, SoundPatch::default().master_volume);
+                assert!(p.layers.iter().all(|l| l.pitch.arp_enabled));
+            }
+        }
+    }
+
+    #[test]
     fn every_category_and_mode_is_valid_and_short() {
         for mode in Mode::ALL {
             for cat in Category::ALL {
