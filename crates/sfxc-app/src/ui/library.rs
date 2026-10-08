@@ -44,6 +44,8 @@ pub fn show(
     ui.add_space(8.0);
 
     egui::Panel::bottom("library_footer").frame(egui::Frame::NONE).show_separator_line(false).show(ui, |ui| {
+        // The footer is its own panel and clips to its content rect; the button's shadow needs the panel margin.
+        ui.set_clip_rect(ui.clip_rect().expand(14.0));
         ui.add_space(6.0);
         settings_button(ui, prefs, actions);
         ui.add_space(4.0);
