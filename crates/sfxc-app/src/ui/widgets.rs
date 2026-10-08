@@ -38,31 +38,79 @@ pub fn knob_num<N: Numeric>(ui: &mut Ui, label: &str, v: &mut N, lo: N, hi: N, d
     controls::knob(ui, label, v, lo, hi, default, suffix, false)
 }
 
+/// Digits after the decimal point, by the size of the range, so a column of values lines up.
+fn decimals_for(lo: f64, hi: f64, integral: bool) -> usize {
+    let span = (hi - lo).abs();
+    if integral || span >= 1000.0 {
+        0
+    } else if span >= 10.0 {
+        1
+    } else if span >= 1.0 {
+        2
+    } else {
+        3
+    }
+}
+
+/// Label, track and value sit in fixed columns of one allocated row, so nothing can widen the row.
 #[allow(clippy::too_many_arguments)]
 fn param_row<N: Numeric>(ui: &mut Ui, label: &str, v: &mut N, lo: N, hi: N, default: N, suffix: &str, log: bool) -> Response {
+    let p = palette(ui);
     let total = ui.available_width();
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = ROW_GAP;
-        row_label(ui, label);
-        let width = (total - LABEL_W - VALUE_W - ROW_GAP * 2.0).max(60.0);
-        let resp = controls::track(ui, v, lo, hi, default, log, width);
-        let mut drag = egui::DragValue::new(v).range(lo..=hi).suffix(suffix).max_decimals(3);
-        if !log {
-            drag = drag.speed(((hi.to_f64() - lo.to_f64()) / 400.0).max(if N::INTEGRAL { 0.05 } else { 0.0 }));
-        }
-        let dv = ui.allocate_ui_with_layout(
-            Vec2::new(VALUE_W, ui.spacing().interact_size.y),
-            Layout::centered_and_justified(egui::Direction::LeftToRight),
-            |ui| {
-                ui.scope(|ui| {
-                    ui.visuals_mut().widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
-                    ui.add(drag)
-                })
-                .inner
-            },
-        );
-        let dv = dv.inner;
-        resp.union(dv)
+    let h = ui.spacing().interact_size.y.max(26.0);
+    let (row, _) = ui.allocate_exact_size(Vec2::new(total, h), Sense::hover());
+    let label_rect = Rect::from_min_size(row.min, Vec2::new(LABEL_W, h));
+    let value_rect = Rect::from_min_max(Pos2::new((row.right() - VALUE_W).max(label_rect.right()), row.top()), row.right_bottom());
+    let track_rect = Rect::from_min_max(
+        Pos2::new(label_rect.right() + ROW_GAP, row.top()),
+        Pos2::new((value_rect.left() - ROW_GAP).max(label_rect.right() + ROW_GAP + 60.0), row.bottom()),
+    );
+
+    let galley = ui.painter().layout(label.to_string(), FontId::proportional(12.5), p.muted, LABEL_W);
+    ui.painter().galley(Pos2::new(label_rect.left(), label_rect.center().y - galley.size().y / 2.0), galley, p.muted);
+
+    let mut track_ui = ui.new_child(egui::UiBuilder::new().max_rect(track_rect).layout(Layout::left_to_right(Align::Center)));
+    let resp = controls::track(&mut track_ui, v, lo, hi, default, log, track_rect.width());
+
+    let mut drag = egui::DragValue::new(v)
+        .range(lo..=hi)
+        .suffix(suffix)
+        .fixed_decimals(decimals_for(lo.to_f64(), hi.to_f64(), N::INTEGRAL));
+    if !log {
+        drag = drag.speed(((hi.to_f64() - lo.to_f64()) / 400.0).max(if N::INTEGRAL { 0.05 } else { 0.0 }));
+    }
+    let mut value_ui = ui.new_child(egui::UiBuilder::new().max_rect(value_rect).layout(Layout::right_to_left(Align::Center)));
+    let dv = value_ui
+        .scope(|ui| {
+            let w = &mut ui.visuals_mut().widgets;
+            w.inactive.weak_bg_fill = Color32::TRANSPARENT;
+            w.hovered.weak_bg_fill = p.well;
+            w.active.weak_bg_fill = p.well;
+            ui.add(drag)
+        })
+        .inner;
+    resp.union(dv)
+}
+
+/// Dropdown in the same material as the other fields: recessed well, phosphor caret.
+pub fn select<R>(ui: &mut Ui, id_salt: &str, selected: &str, add: impl FnOnce(&mut Ui) -> R) -> Option<R> {
+    let p = palette(ui);
+    ui.scope(|ui| {
+        let w = &mut ui.visuals_mut().widgets;
+        w.inactive.weak_bg_fill = p.well;
+        w.hovered.weak_bg_fill = p.hover;
+        w.active.weak_bg_fill = p.hover;
+        w.open.weak_bg_fill = p.hover;
+        ui.spacing_mut().button_padding = Vec2::new(12.0, 7.0);
+        egui::ComboBox::from_id_salt(id_salt)
+            .selected_text(selected)
+            .width(ui.available_width())
+            .icon(move |ui, rect, _visuals, open| {
+                let glyph = if open { icon::CARET_UP } else { icon::CARET_DOWN };
+                ui.painter().text(rect.center(), Align2::CENTER_CENTER, glyph, FontId::proportional(14.0), p.muted);
+            })
+            .show_ui(ui, add)
+            .inner
     })
     .inner
 }
@@ -211,18 +259,26 @@ pub fn material_card<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
 /// Collapsible card; open state is remembered per `key`. `header` adds widgets at the right of the title.
 pub fn section(ui: &mut Ui, key: &str, title: &str, header: impl FnOnce(&mut Ui), body: impl FnOnce(&mut Ui)) {
     let id = ui.make_persistent_id(("section", key));
-    let state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, true);
+    let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, true);
     material_card(ui, |ui| {
         ui.set_width(ui.available_width());
-        state
-            .show_header(ui, |ui| {
-                ui.label(RichText::new(title).font(FontId::new(13.5, theme::semibold())).color(palette(ui).text));
-                ui.with_layout(Layout::right_to_left(Align::Center), header);
-            })
-            .body(|ui| {
-                ui.add_space(4.0);
-                body(ui);
+        ui.horizontal(|ui| {
+            state.show_toggle_button(ui, |ui, openness, resp| {
+                let p = palette(ui);
+                let color = if resp.hovered() { p.text } else { p.muted };
+                let glyph = if openness > 0.5 { icon::CARET_DOWN } else { icon::CARET_RIGHT };
+                ui.painter().text(resp.rect.center(), Align2::CENTER_CENTER, glyph, FontId::proportional(14.0), color);
             });
+            let label = egui::Label::new(RichText::new(title).font(FontId::new(13.5, theme::semibold())).color(palette(ui).text));
+            if ui.add(label.sense(Sense::click())).on_hover_cursor(CursorIcon::PointingHand).clicked() {
+                state.toggle(ui);
+            }
+            ui.with_layout(Layout::right_to_left(Align::Center), header);
+        });
+        state.show_body_unindented(ui, |ui| {
+            ui.add_space(4.0);
+            body(ui);
+        });
     });
     ui.add_space(14.0);
 }
@@ -447,4 +503,37 @@ pub fn list_well(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(*ui.layout()));
     add(&mut child);
     ui.advance_cursor_after_rect(rect);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use eframe::egui::{pos2, vec2, RawInput};
+
+    /// A long value such as "-3.545 oct/s" must not widen the row, and with it the whole card.
+    #[test]
+    fn param_rows_stay_inside_their_column() {
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let mut t = 0.0;
+        for width in [360.0f32, 520.0, 700.0] {
+            t += 0.1;
+            let input = RawInput {
+                screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(width + 80.0, 500.0))),
+                time: Some(t),
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(input, |ui| {
+                ui.allocate_ui(vec2(width, 400.0), |ui| {
+                    ui.set_width(width);
+                    let (mut slide, mut freq, mut accel) = (-3.545f32, 138.6f32, -0.001f32);
+                    param(ui, "Slide", &mut slide, (-8.0, 8.0), 0.0, " oct/s", false);
+                    param(ui, "Frequency", &mut freq, (20.0, 20_000.0), 440.0, " Hz", true);
+                    param(ui, "Slide accel", &mut accel, (-8.0, 8.0), 0.0, " oct/s²", false);
+                    assert!(ui.min_rect().width() <= width + 0.5, "rows grew to {} in a {width} column", ui.min_rect().width());
+                });
+            });
+            out.textures_delta.clear();
+        }
+    }
 }

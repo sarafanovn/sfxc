@@ -137,7 +137,7 @@ pub fn track<N: Numeric>(ui: &mut Ui, v: &mut N, lo: N, hi: N, default: N, log: 
     if ui.is_rect_visible(rect) {
         let m = Motion::of(ui, &resp_c);
         let painter = ui.painter();
-        let rail = Rect::from_center_size(rect.center(), vec2(rect.width() - 8.0, 6.0));
+        let rail = Rect::from_center_size(rect.center(), vec2(rect.width() - 16.0, 6.0));
         material::recessed(painter, rail, 3.0, &p, 0.6);
         let x = egui::lerp(rail.left()..=rail.right(), t);
         let active = 0.6 + 0.4 * m.hover.max(m.focus);

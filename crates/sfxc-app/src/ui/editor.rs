@@ -6,7 +6,7 @@ use sfxc_core::patch::*;
 
 use super::theme::{self, palette};
 use super::widgets::{
-    banner, row_label, button, icon_button, material_card, param, play_button, section, segmented, toggle, waveform, Kind, Tone,
+    banner, row_label, button, icon_button, material_card, param, play_button, section, segmented, select, toggle, waveform, Kind, Tone,
 };
 use super::{arp, controls, effects, Action, Current};
 
@@ -183,8 +183,7 @@ fn generators(ui: &mut Ui, actions: &mut Vec<Action>) {
                 actions.push(Action::Generate(c));
             }
         }
-        ui.add_space(6.0);
-        if button(ui, Kind::Ghost, Some(icon::MAGIC_WAND), "Mutate").on_hover_text("Small random changes (M)").clicked() {
+        if button(ui, Kind::Secondary, Some(icon::MAGIC_WAND), "Mutate").on_hover_text("Small random changes (M)").clicked() {
             actions.push(Action::Mutate);
         }
     });
@@ -216,7 +215,7 @@ fn source_section(ui: &mut Ui, layer: &mut Layer, mode: Mode) {
         let kinds: &[&'static str] = if mode == Mode::Bit8 { &["Pulse", "Triangle", "Noise"] } else { &Source::KIND_NAMES };
         let mut kind = layer.source.kind_name();
         labeled(ui, "Waveform", |ui| {
-            egui::ComboBox::from_id_salt("source_kind").selected_text(kind).width(ui.available_width()).show_ui(ui, |ui| {
+            select(ui, "source_kind", kind, |ui| {
                 for k in kinds {
                     ui.selectable_value(&mut kind, *k, *k);
                 }
@@ -252,14 +251,11 @@ fn source_section(ui: &mut Ui, layer: &mut Layer, mode: Mode) {
 
 fn fm_controls(ui: &mut Ui, algorithm: &mut FmAlgorithm, feedback: &mut f32, ops: &mut [FmOperator; 4]) {
     labeled(ui, "Algorithm", |ui| {
-        egui::ComboBox::from_id_salt("fm_algorithm").selected_text(algorithm.label()).width(ui.available_width()).show_ui(
-            ui,
-            |ui| {
-                for a in FmAlgorithm::ALL {
-                    ui.selectable_value(algorithm, a, a.label());
-                }
-            },
-        );
+        select(ui, "fm_algorithm", algorithm.label(), |ui| {
+            for a in FmAlgorithm::ALL {
+                ui.selectable_value(algorithm, a, a.label());
+            }
+        });
     });
     param(ui, "Feedback", feedback, ranges::UNIT, 0.0, "", false);
     let d = FmOperator::default();
