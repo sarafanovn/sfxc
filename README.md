@@ -35,6 +35,16 @@ sfxc is in the spirit of sfxr and bfxr: click a category, get a coin, a laser or
 
 ## Getting started
 
+### Install
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/sarafanovn/sfxc/main/install.sh | bash
+```
+
+A small menu lets you toggle `sfxc.app` (to `~/Applications`) and `sfxc-cli` (to `~/.local/bin`). It downloads the latest release, or builds from source if there is none (needs Rust). Run it again to update. Remove everything with `... | bash -s -- --uninstall`; your library is kept.
+
+### Build from source
+
 You need a recent stable Rust toolchain (edition 2024). Packaging and testing target macOS.
 
 ```sh
