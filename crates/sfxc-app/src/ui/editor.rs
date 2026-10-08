@@ -6,7 +6,7 @@ use sfxc_core::patch::*;
 
 use super::theme::{self, palette};
 use super::widgets::{
-    banner, row_label, button, card, icon_button, material_card, param, play_button, segmented, toggle, waveform, Kind, Tone,
+    banner, row_label, button, icon_button, material_card, param, play_button, section, segmented, toggle, waveform, Kind, Tone,
 };
 use super::{controls, effects, Action, Current};
 
@@ -19,8 +19,8 @@ pub struct View<'a> {
     pub audio_error: Option<&'a str>,
 }
 
-/// Two parameter columns from this editor width.
-const TWO_COLUMNS: f32 = 640.0;
+/// Widest the editor content gets; wider windows add side margins.
+const MAX_CONTENT: f32 = 720.0;
 
 pub fn show(
     ui: &mut Ui,
@@ -32,7 +32,9 @@ pub fn show(
     actions: &mut Vec<Action>,
 ) {
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-        Frame::new().inner_margin(Margin { left: 24, right: 24, top: 16, bottom: 24 }).show(ui, |ui| {
+        let side = ((ui.available_width() - MAX_CONTENT) / 2.0).clamp(24.0, 127.0) as i8;
+        Frame::new().inner_margin(Margin { left: side, right: side, top: 16, bottom: 24 }).show(ui, |ui| {
+            ui.set_max_width(MAX_CONTENT);
             header(ui, cur, view, actions);
             ui.add_space(14.0);
             if let Some(err) = view.audio_error {
@@ -46,20 +48,11 @@ pub fn show(
 
             let mode = cur.patch.mode;
             let layer = &mut cur.patch.layers[0];
-            if ui.available_width() >= TWO_COLUMNS {
-                ui.columns(2, |cols| {
-                    source_card(&mut cols[0], layer, mode);
-                    pitch_card(&mut cols[0], layer);
-                    envelope_card(&mut cols[1], layer);
-                    filter_card(&mut cols[1], layer);
-                });
-            } else {
-                source_card(ui, layer, mode);
-                pitch_card(ui, layer);
-                envelope_card(ui, layer);
-                filter_card(ui, layer);
-            }
-            output_card(ui, &mut cur.patch);
+            source_section(ui, layer, mode);
+            pitch_section(ui, layer);
+            envelope_section(ui, layer);
+            filter_section(ui, layer);
+            output_section(ui, &mut cur.patch);
             ui.add_space(8.0);
             let next_id = cur.patch.next_effect_id();
             effects::show(ui, &mut cur.patch.master_effects, next_id);
@@ -67,9 +60,9 @@ pub fn show(
     });
 }
 
-fn output_card(ui: &mut Ui, patch: &mut SoundPatch) {
+fn output_section(ui: &mut Ui, patch: &mut SoundPatch) {
     let d = SoundPatch::default();
-    card(ui, "Output", |_| {}, |ui| {
+    section(ui, "output", "Output", |_| {}, |ui| {
         param(ui, "Gain", &mut patch.master_volume, ranges::UNIT, d.master_volume, "", false);
     });
 }
@@ -217,8 +210,8 @@ fn labeled(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui)) {
     });
 }
 
-fn source_card(ui: &mut Ui, layer: &mut Layer, mode: Mode) {
-    card(ui, "Source", |_| {}, |ui| {
+fn source_section(ui: &mut Ui, layer: &mut Layer, mode: Mode) {
+    section(ui, "source", "Source", |_| {}, |ui| {
         let kinds: &[&'static str] = if mode == Mode::Bit8 { &["Pulse", "Triangle", "Noise"] } else { &Source::KIND_NAMES };
         let mut kind = layer.source.kind_name();
         labeled(ui, "Waveform", |ui| {
@@ -285,38 +278,21 @@ fn fm_controls(ui: &mut Ui, algorithm: &mut FmAlgorithm, feedback: &mut f32, ops
     }
 }
 
-fn pitch_card(ui: &mut Ui, layer: &mut Layer) {
+fn pitch_section(ui: &mut Ui, layer: &mut Layer) {
     let d = Pitch::default();
-    card(ui, "Pitch", |_| {}, |ui| {
+    section(ui, "pitch", "Pitch", |_| {}, |ui| {
         let p = &mut layer.pitch;
         param(ui, "Frequency", &mut p.base_freq, ranges::BASE_FREQ, d.base_freq, " Hz", true);
         param(ui, "Slide", &mut p.slide, ranges::SLIDE, 0.0, " oct/s", false);
         param(ui, "Slide accel", &mut p.delta_slide, ranges::DELTA_SLIDE, 0.0, " oct/s²", false);
         param(ui, "Vibrato depth", &mut p.vibrato_depth, ranges::VIBRATO_DEPTH, 0.0, " st", false);
         param(ui, "Vibrato rate", &mut p.vibrato_rate, ranges::VIBRATO_RATE, d.vibrato_rate, " Hz", false);
-        labeled(ui, "Arpeggio", |ui| {
-            ui.spacing_mut().item_spacing.x = 4.0;
-            ui.horizontal_wrapped(|ui| {
-                for s in p.arp_steps.iter_mut() {
-                    ui.add(egui::DragValue::new(s).range(-24..=24).suffix(" st"));
-                }
-                if p.arp_steps.len() < MAX_ARP_STEPS && icon_button(ui, icon::PLUS, "Add step").clicked() {
-                    p.arp_steps.push(0);
-                }
-                if !p.arp_steps.is_empty() && icon_button(ui, icon::MINUS, "Remove last step").clicked() {
-                    p.arp_steps.pop();
-                }
-            });
-        });
-        if !p.arp_steps.is_empty() {
-            param(ui, "Arp step", &mut p.arp_speed, ranges::ARP_SPEED, d.arp_speed, " s", true);
-        }
     });
 }
 
-fn envelope_card(ui: &mut Ui, layer: &mut Layer) {
+fn envelope_section(ui: &mut Ui, layer: &mut Layer) {
     let d = Envelope::default();
-    card(ui, "Envelope", |_| {}, |ui| {
+    section(ui, "envelope", "Envelope", |_| {}, |ui| {
         let e = &mut layer.env;
         param(ui, "Attack", &mut e.attack, ranges::ENV_TIME, d.attack, " s", true);
         param(ui, "Decay", &mut e.decay, ranges::ENV_TIME, d.decay, " s", true);
@@ -327,10 +303,10 @@ fn envelope_card(ui: &mut Ui, layer: &mut Layer) {
     });
 }
 
-fn filter_card(ui: &mut Ui, layer: &mut Layer) {
+fn filter_section(ui: &mut Ui, layer: &mut Layer) {
     let d = Filter::default();
     let f = &mut layer.filter;
-    card(ui, "Filter", |_| {}, |ui| {
+    section(ui, "filter", "Filter", |_| {}, |ui| {
         let options: Vec<_> = FilterKind::ALL.iter().map(|k| (*k, k.label())).collect();
         segmented(ui, &mut f.kind, &options);
         ui.add_space(4.0);

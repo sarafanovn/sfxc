@@ -215,16 +215,21 @@ pub fn material_card<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     inner.inner
 }
 
-/// Card with a title row; `trailing` adds widgets at the right of the title.
-pub fn card(ui: &mut Ui, title: &str, trailing: impl FnOnce(&mut Ui), add: impl FnOnce(&mut Ui)) {
+/// Collapsible card; open state is remembered per `key`. `header` adds widgets at the right of the title.
+pub fn section(ui: &mut Ui, key: &str, title: &str, header: impl FnOnce(&mut Ui), body: impl FnOnce(&mut Ui)) {
+    let id = ui.make_persistent_id(("section", key));
+    let state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, true);
     material_card(ui, |ui| {
         ui.set_width(ui.available_width());
-        ui.horizontal(|ui| {
-            ui.label(RichText::new(title).font(FontId::new(13.5, theme::semibold())).color(palette(ui).text));
-            ui.with_layout(Layout::right_to_left(Align::Center), trailing);
-        });
-        ui.add_space(6.0);
-        add(ui);
+        state
+            .show_header(ui, |ui| {
+                ui.label(RichText::new(title).font(FontId::new(13.5, theme::semibold())).color(palette(ui).text));
+                ui.with_layout(Layout::right_to_left(Align::Center), header);
+            })
+            .body(|ui| {
+                ui.add_space(4.0);
+                body(ui);
+            });
     });
     ui.add_space(14.0);
 }
