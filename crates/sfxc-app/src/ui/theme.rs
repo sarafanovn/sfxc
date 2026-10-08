@@ -18,8 +18,6 @@ pub const R_DIALOG: u8 = 14;
 pub const T_HOVER: f32 = 0.15;
 pub const T_PRESS: f32 = 0.08;
 pub const T_RELEASE: f32 = 0.25;
-/// Distance in points at which controls start reacting to the pointer.
-pub const PROXIMITY: f32 = 60.0;
 
 /// Semantic colors. Code outside this module never uses raw hex values.
 #[derive(Clone, Copy)]

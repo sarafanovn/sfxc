@@ -973,8 +973,18 @@ mod render_smoke {
 
     #[test]
     fn editor_survives_pointer_everywhere() {
+        sweep(false);
+    }
+
+    #[test]
+    fn editor_survives_pointer_with_effect_picker_open() {
+        sweep(true);
+    }
+
+    fn sweep(picker_open: bool) {
         let ctx = egui::Context::default();
         theme::install(&ctx);
+        ctx.data_mut(|d| d.insert_temp(egui::Id::new("fx_add_open"), picker_open));
         let (w, h) = (900.0, 1400.0);
         let mut cur = Current {
             id: 1,

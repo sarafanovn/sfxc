@@ -4,7 +4,7 @@ use sfxc_core::patch::{ranges::*, DistortionKind, Effect, EffectKind};
 
 use super::material::{self, Motion};
 use super::theme::{self, palette, Palette, R_CARD};
-use super::widgets::{hint, icon_button, knob, knob_num, segmented, toggle};
+use super::widgets::{icon_button, knob, knob_num, segmented, toggle};
 
 const CARD_W: f32 = 168.0;
 const CARD_H: f32 = 300.0;
@@ -52,9 +52,6 @@ pub fn show(ui: &mut egui::Ui, effects: &mut Vec<Effect>, next_id: u64) {
     let p = palette(ui);
     ui.horizontal(|ui| {
         ui.label(RichText::new("Effects").text_style(egui::TextStyle::Heading).color(p.text));
-        if effects.len() > 1 {
-            ui.label(hint(ui, "Drag a card by its title to reorder"));
-        }
     });
     ui.add_space(6.0);
 
@@ -99,15 +96,6 @@ pub fn show(ui: &mut egui::Ui, effects: &mut Vec<Effect>, next_id: u64) {
             });
         }
         add_card(ui, slot(n), &mut op);
-        if n == 0 {
-            ui.painter().text(
-                slot(1).left_center(),
-                Align2::LEFT_CENTER,
-                "Add reverb, delay or a bitcrusher to shape the sound.",
-                FontId::proportional(12.5),
-                p.faint,
-            );
-        }
         // Released outside any header (e.g. window lost the pointer): cancel.
         if drag.is_some() && !ui.input(|i| i.pointer.any_down()) && op.is_none() {
             drag = None;
@@ -159,8 +147,8 @@ fn card(ui: &mut egui::Ui, rect: Rect, effect: &mut Effect, i: usize, lifted: bo
     }
     let painter = ui.painter();
     if effect.enabled || lifted {
-        let m = if lifted { Motion { hover: 1.0, near: 1.0, ..Motion::REST } } else { Motion::of(ui, &head) };
-        material::raised(painter, rect, R_CARD as f32, &Palette { raised: p.surface, ..p }, &Motion { pointer: None, ..m });
+        let m = if lifted { Motion { hover: 1.0, ..Motion::REST } } else { Motion::of(ui, &head) };
+        material::raised(painter, rect, R_CARD as f32, &Palette { raised: p.surface, ..p }, &m);
     } else {
         material::recessed(painter, rect, R_CARD as f32, &p, 0.5);
     }
@@ -185,21 +173,71 @@ fn card(ui: &mut egui::Ui, rect: Rect, effect: &mut Effect, i: usize, lifted: bo
     body_ui.add_enabled_ui(effect.enabled, |ui| params(ui, &mut effect.kind));
 }
 
+const PICK_ROW: f32 = 30.0;
+
+/// The trailing "+" card. Clicking it turns the card into the list of effects; picking one, Esc,
+/// the close button or a click elsewhere turns it back.
 fn add_card(ui: &mut egui::Ui, rect: Rect, op: &mut Option<Op>) {
     let p = palette(ui);
-    let resp = ui.interact(rect, Id::new("fx_add"), Sense::click()).on_hover_cursor(CursorIcon::PointingHand).on_hover_text("Add effect");
-    let m = Motion::of(ui, &resp);
-    material::recessed(ui.painter(), rect, R_CARD as f32, &p, 0.5 + 0.3 * m.hover);
-    material::accent_edge(ui.painter(), rect, R_CARD as f32, &p, m.hover);
-    ui.painter().text(rect.center(), Align2::CENTER_CENTER, icon::PLUS, FontId::proportional(28.0), if m.hover > 0.5 { p.accent_text } else { p.muted });
-    egui::Popup::menu(&resp).show(|ui| {
-        ui.set_min_width(160.0);
-        for kind in EffectKind::all_defaults() {
-            if ui.button(kind.name()).clicked() {
+    let open_id = Id::new("fx_add_open");
+    let mut open = ui.data(|d| d.get_temp::<bool>(open_id)).unwrap_or(false);
+    let t = ui.ctx().animate_bool_with_time(open_id.with("t"), open, 0.18);
+    let radius = R_CARD as f32;
+
+    // Closed look fades out as the list fades in.
+    material::recessed(ui.painter(), rect, radius, &p, 0.5 * (1.0 - t));
+    if t < 0.99 {
+        let closed_alpha = 1.0 - t;
+        if !open {
+            let resp = ui.interact(rect, Id::new("fx_add"), Sense::click()).on_hover_cursor(CursorIcon::PointingHand).on_hover_text("Add effect");
+            let m = Motion::of(ui, &resp);
+            material::accent_edge(ui.painter(), rect, radius, &p, m.hover * closed_alpha);
+            if resp.clicked() {
+                open = true;
+            }
+            let c = if m.hover > 0.5 { p.accent_text } else { p.muted };
+            ui.painter().text(rect.center(), Align2::CENTER_CENTER, icon::PLUS, FontId::proportional(28.0), c.gamma_multiply(closed_alpha));
+        } else {
+            ui.painter().text(rect.center(), Align2::CENTER_CENTER, icon::PLUS, FontId::proportional(28.0), p.muted.gamma_multiply(closed_alpha));
+        }
+    }
+    if t > 0.01 {
+        let mut painter = ui.painter().clone();
+        painter.set_opacity(t);
+        material::raised(&painter, rect, radius, &Palette { raised: p.surface, ..p }, &Motion::REST);
+        let head_rect = Rect::from_min_size(rect.min, vec2(CARD_W, HEAD_H));
+        painter.text(head_rect.left_center() + vec2(12.0, 0.0), Align2::LEFT_CENTER, "Add effect", FontId::new(13.5, theme::semibold()), p.text);
+        let mut head = ui.new_child(egui::UiBuilder::new().max_rect(head_rect.shrink2(vec2(8.0, 4.0))).layout(Layout::right_to_left(Align::Center)));
+        head.set_opacity(t);
+        if open && icon_button(&mut head, icon::X, "Close").clicked() {
+            open = false;
+        }
+        for (i, kind) in EffectKind::all_defaults().into_iter().enumerate() {
+            let row = Rect::from_min_size(
+                Pos2::new(rect.left() + 10.0, rect.top() + HEAD_H + i as f32 * (PICK_ROW + 2.0)),
+                vec2(CARD_W - 20.0, PICK_ROW),
+            );
+            let resp = ui.interact(row, Id::new(("fx_pick", i)), if open { Sense::click() } else { Sense::hover() });
+            if open {
+                resp.clone().on_hover_cursor(CursorIcon::PointingHand);
+            }
+            let mut row_ui = ui.new_child(egui::UiBuilder::new().max_rect(row));
+            row_ui.set_opacity(t);
+            super::widgets::row_background(&row_ui, row, &resp, false);
+            row_ui.painter().text(row.left_center() + vec2(10.0, 0.0), Align2::LEFT_CENTER, kind.name(), FontId::proportional(13.0), p.text);
+            if open && resp.clicked() {
                 *op = Some(Op::Add(kind));
+                open = false;
             }
         }
-    });
+    }
+    if open {
+        let outside = ui.input(|i| i.pointer.any_pressed()) && !ui.ctx().pointer_interact_pos().is_some_and(|pt| rect.contains(pt));
+        if outside || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            open = false;
+        }
+    }
+    ui.data_mut(|d| d.insert_temp(open_id, open));
 }
 
 fn params(ui: &mut egui::Ui, kind: &mut EffectKind) {

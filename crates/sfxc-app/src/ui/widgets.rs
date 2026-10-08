@@ -102,7 +102,7 @@ pub fn button(ui: &mut Ui, kind: Kind, icon: Option<&str>, text: &str) -> Respon
             Kind::Secondary => material::raised(painter, rect, R_CONTROL as f32, &p, &m),
             Kind::Ghost => {
                 if m.hover > 0.0 {
-                    material::raised(painter, rect, R_CONTROL as f32, &p, &Motion { near: 0.0, ..m });
+                    material::raised(painter, rect, R_CONTROL as f32, &p, &m);
                 }
             }
             Kind::Primary | Kind::Danger => {
@@ -196,10 +196,10 @@ pub fn material_card<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     let under = ui.painter().add(Shape::Noop);
     let inner = card_frame(ui).show(ui, add);
     let rect = inner.response.rect;
-    let m = Motion { pointer: None, ..Motion::of(ui, &ui.interact(rect, inner.response.id.with("card"), Sense::hover())) };
+    let m = Motion::of(ui, &ui.interact(rect, inner.response.id.with("card"), Sense::hover()));
     let painter = ui.painter().clone();
     let mut shapes = Vec::new();
-    let e = 0.6 + 0.2 * m.near;
+    let e = 0.6 + 0.2 * m.hover;
     let d = (5.0 * e) as i8;
     shapes.push(Shape::from(Shadow { offset: [-d, -d], blur: 16, spread: 0, color: p.shadow_light }.as_shape(rect, R_CARD)));
     shapes.push(Shape::from(Shadow { offset: [d, d], blur: 16, spread: 0, color: p.shadow_dark }.as_shape(rect, R_CARD)));
@@ -433,7 +433,7 @@ pub fn row_background(ui: &Ui, rect: Rect, resp: &Response, selected: bool) {
     } else {
         let m = Motion::of(ui, resp);
         if m.hover > 0.01 {
-            material::raised(ui.painter(), rect, radius, &p, &Motion { near: 0.0, pointer: None, ..m });
+            material::raised(ui.painter(), rect, radius, &p, &m);
         }
     }
 }

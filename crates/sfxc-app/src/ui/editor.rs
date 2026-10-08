@@ -329,8 +329,10 @@ fn arp_section(ui: &mut Ui, layer: &mut Layer, view: &View) {
                 ui.add_space(4.0);
                 param(ui, "Step", &mut pitch.arp_speed, ranges::ARP_SPEED, d.arp_speed, " s", true);
                 let fit = arp::steps_that_fit(sound_secs, pitch.arp_speed);
+                // One line either way, so the section keeps its height while Step is dragged.
                 if fit < 2 {
-                    banner(ui, Tone::Warn, icon::WARNING, "Only the first step plays: shorten Step or lengthen the envelope.", false);
+                    let warn = palette(ui).warn;
+                    ui.label(RichText::new(format!("{}  Only the first step plays: shorten Step or lengthen the envelope.", icon::WARNING)).color(warn).size(11.5));
                 } else {
                     ui.label(super::widgets::hint(ui, format!("{fit} steps fit into the sound")));
                 }

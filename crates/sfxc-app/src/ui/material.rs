@@ -12,30 +12,21 @@ pub struct Motion {
     pub hover: f32,
     pub press: f32,
     pub focus: f32,
-    /// 1 when the pointer is on the widget, fading to 0 at `PROXIMITY`.
-    pub near: f32,
-    /// Pointer position while it is within `PROXIMITY`, for the moving highlight.
-    pub pointer: Option<Pos2>,
 }
 
 impl Motion {
-    pub const REST: Motion = Motion { hover: 0.0, press: 0.0, focus: 0.0, near: 0.0, pointer: None };
+    pub const REST: Motion = Motion { hover: 0.0, press: 0.0, focus: 0.0 };
 
     pub fn of(ui: &Ui, resp: &Response) -> Self {
         let ctx = ui.ctx();
         let id = resp.id;
         let enabled = ui.is_enabled();
         let down = enabled && resp.is_pointer_button_down_on();
-        let pointer = ctx.pointer_hover_pos().filter(|_| enabled);
-        let dist = pointer.map_or(f32::INFINITY, |p| resp.rect.distance_to_pos(p));
-        let near_target = (1.0 - dist / theme::PROXIMITY).clamp(0.0, 1.0);
         let press_time = if down { theme::T_PRESS } else { theme::T_RELEASE };
         Self {
             hover: ctx.animate_bool_with_time(id.with("m_hover"), enabled && resp.hovered(), theme::T_HOVER),
             press: ctx.animate_bool_with_time_and_easing(id.with("m_press"), down, press_time, easing::back_out),
             focus: ctx.animate_bool_with_time(id.with("m_focus"), resp.has_focus(), theme::T_HOVER),
-            near: ctx.animate_value_with_time(id.with("m_near"), near_target, theme::T_HOVER),
-            pointer: pointer.filter(|_| near_target > 0.0),
         }
     }
 }
@@ -59,21 +50,15 @@ fn rounded_outline(rect: Rect, r: f32, seg: usize) -> Vec<Pos2> {
     pts
 }
 
-/// Fill with a 4% top-to-bottom gradient and an optional soft highlight at `highlight.0`.
-pub fn surface(painter: &Painter, rect: Rect, radius: f32, base: Color32, highlight: Option<(Pos2, f32)>) {
+/// Fill with a 4% top-to-bottom gradient.
+pub fn surface(painter: &Painter, rect: Rect, radius: f32, base: Color32) {
     painter.rect_filled(rect, radius, base);
     let top = base.lerp_to_gamma(Color32::WHITE, 0.04);
     let bottom = base.lerp_to_gamma(Color32::BLACK, 0.04);
     let shade = |y: f32| top.lerp_to_gamma(bottom, ((y - rect.top()) / rect.height().max(1.0)).clamp(0.0, 1.0));
     let outline = rounded_outline(rect.shrink(0.5), radius - 0.5, 6);
-    // Not `Pos2::clamp`: that panics on a degenerate or NaN rect.
-    let center = highlight.map_or(rect.center(), |(p, _)| Pos2::new(p.x.max(rect.min.x).min(rect.max.x), p.y.max(rect.min.y).min(rect.max.y)));
-    let center_color = match highlight {
-        Some((_, s)) => shade(center.y).lerp_to_gamma(Color32::WHITE, s.clamp(0.0, 1.0)),
-        None => shade(center.y),
-    };
     let mut mesh = Mesh::default();
-    mesh.colored_vertex(center, center_color);
+    mesh.colored_vertex(rect.center(), shade(rect.center().y));
     for pt in &outline {
         mesh.colored_vertex(*pt, shade(pt.y));
     }
@@ -99,18 +84,17 @@ fn inset(painter: &Painter, rect: Rect, radius: f32, p: &Palette, depth: f32) {
     }
 }
 
-/// Thin accent glow along the edge; `t` is its strength (hover or focus).
+/// Thin accent line just inside the edge; `t` is its strength (hover or focus). Nothing is drawn outside the element.
 pub fn accent_edge(painter: &Painter, rect: Rect, radius: f32, p: &Palette, t: f32) {
     if t <= 0.01 {
         return;
     }
-    painter.rect_stroke(rect, radius, Stroke::new(1.5, p.accent.gamma_multiply(0.75 * t)), StrokeKind::Outside);
-    painter.rect_stroke(rect.expand(1.5), radius + 1.5, Stroke::new(3.0, p.accent.gamma_multiply(0.15 * t)), StrokeKind::Outside);
+    painter.rect_stroke(rect, radius, Stroke::new(1.5, p.accent.gamma_multiply(0.75 * t)), StrokeKind::Inside);
 }
 
 /// Raised surface that bulges on hover, sinks on press and springs back on release.
 pub fn raised(painter: &Painter, rect: Rect, radius: f32, p: &Palette, m: &Motion) {
-    let e = (0.6 + 0.25 * m.near + 0.4 * m.hover) * (1.0 - m.press);
+    let e = (0.6 + 0.4 * m.hover) * (1.0 - m.press);
     if e > 0.0 {
         // Small controls get small shadows, so they stay inside the gap around them.
         let k = (rect.size().min_elem() / 44.0).clamp(0.45, 1.0);
@@ -119,8 +103,7 @@ pub fn raised(painter: &Painter, rect: Rect, radius: f32, p: &Palette, m: &Motio
         painter.add(Shadow { offset: [-d, -d], blur, spread: 0, color: p.shadow_light }.as_shape(rect, radius));
         painter.add(Shadow { offset: [d, d], blur, spread: 0, color: p.shadow_dark }.as_shape(rect, radius));
     }
-    let glow = 0.05 * m.near + 0.05 * m.hover;
-    surface(painter, rect, radius, p.raised, m.pointer.map(|pt| (pt, glow)));
+    surface(painter, rect, radius, p.raised);
     inset(painter, rect, radius, p, m.press.clamp(0.0, 1.0));
     accent_edge(painter, rect, radius, p, m.hover.max(m.focus));
 }
