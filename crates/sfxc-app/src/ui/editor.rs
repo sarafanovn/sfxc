@@ -82,7 +82,7 @@ pub fn show(
     dock(ui, panel, &mut cur.patch, volume, actions);
 }
 
-/// Bottom-right corner: a small speaker that grows into Mutate, playback Volume and the sound's Gain
+/// Bottom-right corner: a small speaker that grows into playback Volume and the sound's Gain
 /// while the pointer is over it.
 fn dock(ui: &mut Ui, panel: Rect, patch: &mut SoundPatch, volume: &mut f32, actions: &mut Vec<Action>) {
     const OPEN_W: f32 = 270.0;
@@ -126,14 +126,6 @@ fn dock(ui: &mut Ui, panel: Rect, patch: &mut SoundPatch, volume: &mut f32, acti
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.label(RichText::new(icon::SPEAKER_HIGH).color(p.muted).size(18.0));
-                    if t > 0.3 {
-                        ui.scope(|ui| {
-                            ui.set_opacity(t);
-                            if button(ui, Kind::Secondary, Some(icon::MAGIC_WAND), "Mutate").on_hover_text("Small random changes (M)").clicked() {
-                                actions.push(Action::Mutate);
-                            }
-                        });
-                    }
                 });
             })
         });
@@ -221,6 +213,10 @@ fn transport(ui: &mut Ui, cur: &mut Current, view: &View, autoplay: &mut bool, m
             }
             ui.add_space(12.0);
             toggle(ui, autoplay, "Auto-play").on_hover_text("Play after every change");
+            ui.add_space(4.0);
+            if button(ui, Kind::Secondary, Some(icon::MAGIC_WAND), "Mutate").on_hover_text("Small random changes (M)").clicked() {
+                actions.push(Action::Mutate);
+            }
         });
     });
     if let Some(note) = mode_note.as_ref() {
