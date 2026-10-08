@@ -15,6 +15,7 @@ mod versions;
 mod widgets;
 
 use std::path::PathBuf;
+use std::sync::mpsc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
@@ -101,6 +102,13 @@ enum ToastKind {
     Error,
 }
 
+struct ExportJob {
+    sound_id: i64,
+    version_id: i64,
+    path: PathBuf,
+    done: mpsc::Receiver<Result<()>>,
+}
+
 struct Toast {
     msg: String,
     kind: ToastKind,
@@ -140,6 +148,7 @@ pub struct SfxcApp {
     note_prompt: Option<String>,
     confirm_delete: Option<i64>,
     toasts: Vec<Toast>,
+    export_job: Option<ExportJob>,
     last_auto_check: Instant,
 }
 
@@ -171,6 +180,7 @@ impl SfxcApp {
             note_prompt: None,
             confirm_delete: None,
             toasts: Vec::new(),
+            export_job: None,
             last_auto_check: Instant::now(),
         };
         app.open_store();
@@ -345,20 +355,20 @@ impl SfxcApp {
         }
     }
 
-    fn commit_version(&mut self, note: &str, exported: bool) {
+    fn commit_version(&mut self, note: &str) -> Option<i64> {
         self.flush_draft();
-        let (Some(store), Some(cur)) = (&self.store, &self.current) else { return };
-        let r = store.commit_version(cur.id, note, exported, now_secs());
-        if self.check(r).is_some() {
-            self.refresh_versions();
-        }
+        let (Some(store), Some(cur)) = (&self.store, &self.current) else { return None };
+        let r = store.commit_version(cur.id, note, now_secs());
+        let vid = self.check(r)?;
+        self.refresh_versions();
+        Some(vid)
     }
 
     fn maybe_auto_version(&mut self) {
         let (Some(store), Some(cur)) = (&self.store, &self.current) else { return };
         let due = matches!(store.last_version_time(cur.id), Ok(Some(t)) if now_secs() - t >= AUTO_VERSION_SECS);
         if due && store.draft_differs_from_latest(cur.id).unwrap_or(false) {
-            self.commit_version("auto", false);
+            self.commit_version("auto");
         }
     }
 
@@ -386,7 +396,7 @@ impl SfxcApp {
     }
 
     fn duplicate_current(&mut self) {
-        self.commit_version("", false);
+        self.commit_version("");
         if let Some(v) = self.current_version {
             self.duplicate_version(v);
         }
@@ -438,6 +448,9 @@ impl SfxcApp {
     }
 
     fn run_export(&mut self) {
+        if self.export_job.is_some() {
+            return self.toast("An export is already running");
+        }
         let (Some(store), Some(cur)) = (&self.store, &self.current) else { return };
         let opts = self.export_settings.options(cur.patch.mode);
         let ext = opts.format.extension();
@@ -449,16 +462,43 @@ impl SfxcApp {
             dialog = dialog.set_directory(dir);
         }
         let Some(path) = dialog.save_file() else { return };
-        match export_to_path(&cur.patch, &opts, &path) {
-            Ok(()) => {
-                if let Some(parent) = path.parent() {
-                    let _ = store.set_export_dir(cur.id, &parent.to_string_lossy());
-                }
-                self.commit_version("", true);
-                self.toast_ok(format!("Exported {}", path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned())));
-            }
-            Err(e) => self.toast(format!("Export failed: {e:#}")),
+        let (sound_id, patch) = (cur.id, cur.patch.clone());
+        let Some(version_id) = self.commit_version("") else { return };
+        let (tx, rx) = mpsc::channel();
+        let ctx = self.ctx.clone();
+        let target = path.clone();
+        std::thread::Builder::new()
+            .name("sfxc-export".into())
+            .spawn(move || {
+                let _ = tx.send(export_to_path(&patch, &opts, &target));
+                ctx.request_repaint();
+            })
+            .expect("spawn export thread");
+        self.export_job = Some(ExportJob { sound_id, version_id, path, done: rx });
+    }
+
+    fn finish_export(&mut self) {
+        let Some(job) = &self.export_job else { return };
+        let result = match job.done.try_recv() {
+            Ok(r) => r,
+            Err(mpsc::TryRecvError::Empty) => return,
+            Err(mpsc::TryRecvError::Disconnected) => Err(anyhow::anyhow!("export thread stopped")),
+        };
+        let job = self.export_job.take().expect("checked above");
+        let name = job.path.file_name().map_or_else(|| job.path.display().to_string(), |n| n.to_string_lossy().into_owned());
+        if let Err(e) = result {
+            return self.toast(format!("Export failed: {e:#}"));
         }
+        if let Some(store) = &self.store {
+            let now = now_secs();
+            let dir = job.path.parent().map(|p| store.set_export_dir(job.sound_id, &p.to_string_lossy()));
+            let r = store.mark_exported(job.version_id, now).and(dir.unwrap_or(Ok(())));
+            self.check(r);
+        }
+        if self.current.as_ref().is_some_and(|c| c.id == job.sound_id) {
+            self.refresh_versions();
+        }
+        self.toast_ok(format!("Exported {name}"));
     }
 
     // ---- editing / playback ------------------------------------------------
@@ -581,7 +621,7 @@ impl SfxcApp {
             }
             Action::CommitVersion(note) => {
                 self.note_prompt = None;
-                self.commit_version(note.trim(), false);
+                self.commit_version(note.trim());
             }
             Action::Restore(v) => self.restore(v),
             Action::DuplicateVersion(v) => self.duplicate_version(v),
@@ -624,6 +664,7 @@ impl SfxcApp {
 
     fn poll(&mut self, ctx: &egui::Context) {
         self.player.maintain();
+        self.finish_export();
         if !self.player.is_available() {
             ctx.request_repaint_after(Duration::from_secs(3));
         }

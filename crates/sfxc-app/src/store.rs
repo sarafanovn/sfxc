@@ -175,7 +175,7 @@ impl Store {
 
     /// Snapshots the draft as a version. If the draft equals the latest version, no new
     /// version is created; a non-empty note is attached to the latest one instead.
-    pub fn commit_version(&self, sound_id: i64, note: &str, exported: bool, now: i64) -> Result<i64> {
+    pub fn commit_version(&self, sound_id: i64, note: &str, now: i64) -> Result<i64> {
         let draft = self.draft_json(sound_id)?;
         let tx = self.conn.unchecked_transaction()?;
         let vid = match self.latest_version(sound_id)? {
@@ -196,12 +196,14 @@ impl Store {
                 tx.last_insert_rowid()
             }
         };
-        if exported {
-            tx.execute("UPDATE versions SET exported_at = ?1 WHERE id = ?2", params![now, vid])?;
-        }
         tx.execute("UPDATE sounds SET current_version_id = ?1, updated_at = ?2 WHERE id = ?3", params![vid, now, sound_id])?;
         tx.commit()?;
         Ok(vid)
+    }
+
+    pub fn mark_exported(&self, version_id: i64, now: i64) -> Result<()> {
+        self.conn.execute("UPDATE versions SET exported_at = ?1 WHERE id = ?2", params![now, version_id])?;
+        Ok(())
     }
 
     pub fn list_versions(&self, sound_id: i64) -> Result<Vec<VersionInfo>> {
@@ -236,7 +238,7 @@ impl Store {
     /// Keeps the current draft as a version, then makes `version_id` the draft.
     pub fn restore_version(&self, sound_id: i64, version_id: i64, now: i64) -> Result<SoundPatch> {
         let patch = self.load_version(version_id)?;
-        self.commit_version(sound_id, "", false, now)?;
+        self.commit_version(sound_id, "", now)?;
         self.conn.execute(
             "UPDATE sounds SET draft_json = ?1, current_version_id = ?2, updated_at = ?3 WHERE id = ?4",
             params![patch.to_json(), version_id, now, sound_id],
@@ -324,11 +326,11 @@ mod tests {
         let id = s.create_sound("a", &patch(300.0), 10).unwrap();
         let v1 = s.current_version_id(id).unwrap().unwrap();
         assert!(!s.draft_differs_from_latest(id).unwrap());
-        assert_eq!(s.commit_version(id, "", false, 11).unwrap(), v1);
+        assert_eq!(s.commit_version(id, "", 11).unwrap(), v1);
 
         s.save_draft(id, &patch(400.0), 12).unwrap();
         assert!(s.draft_differs_from_latest(id).unwrap());
-        let v2 = s.commit_version(id, "higher", false, 13).unwrap();
+        let v2 = s.commit_version(id, "higher", 13).unwrap();
         assert_ne!(v2, v1);
         let versions = s.list_versions(id).unwrap();
         assert_eq!(versions.len(), 2);
@@ -342,7 +344,7 @@ mod tests {
     fn note_on_unchanged_draft_annotates_latest() {
         let s = Store::open_in_memory().unwrap();
         let id = s.create_sound("a", &patch(300.0), 10).unwrap();
-        let v1 = s.commit_version(id, "keeper", false, 11).unwrap();
+        let v1 = s.commit_version(id, "keeper", 11).unwrap();
         let v = s.list_versions(id).unwrap();
         assert_eq!((v.len(), v[0].id, v[0].note.as_str()), (1, v1, "keeper"));
     }
@@ -351,7 +353,8 @@ mod tests {
     fn export_marks_version() {
         let s = Store::open_in_memory().unwrap();
         let id = s.create_sound("a", &patch(300.0), 10).unwrap();
-        s.commit_version(id, "", true, 20).unwrap();
+        let v = s.commit_version(id, "", 15).unwrap();
+        s.mark_exported(v, 20).unwrap();
         assert_eq!(s.list_versions(id).unwrap()[0].exported_at, Some(20));
     }
 
