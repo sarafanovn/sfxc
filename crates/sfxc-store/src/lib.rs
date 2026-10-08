@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use directories::ProjectDirs;
 use rusqlite::{params, Connection, OptionalExtension};
+use serde::{Deserialize, Serialize};
+use sfxc_core::export::ExportOptions;
 use sfxc_core::patch::SoundPatch;
 
 /// Each entry upgrades the schema by one version. Never edit an entry after release.
@@ -34,7 +36,16 @@ const MIGRATIONS: &[&str] = &[r#"
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
     );
+"#, r#"
+    ALTER TABLE sounds ADD COLUMN export_link TEXT;
 "#];
+
+/// Where `sfxc-cli export` writes a sound and with which settings. `path` is absolute.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ExportLink {
+    pub path: String,
+    pub options: ExportOptions,
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct SoundSummary {
@@ -69,6 +80,60 @@ impl Store {
 
     pub fn open_in_memory() -> Result<Self> {
         Self::init(Connection::open_in_memory()?)
+    }
+
+    pub fn export_link(&self, id: i64) -> Result<Option<ExportLink>> {
+        let json: Option<String> = self.conn.query_row("SELECT export_link FROM sounds WHERE id = ?1", [id], |r| r.get(0))?;
+        json.map(|j| serde_json::from_str(&j).context("export link is unreadable")).transpose()
+    }
+
+    pub fn set_export_link(&self, id: i64, link: &ExportLink) -> Result<()> {
+        self.conn.execute("UPDATE sounds SET export_link = ?1 WHERE id = ?2", params![serde_json::to_string(link)?, id])?;
+        Ok(())
+    }
+
+    pub fn linked_sounds(&self) -> Result<Vec<i64>> {
+        let mut stmt = self.conn.prepare("SELECT id FROM sounds WHERE export_link IS NOT NULL ORDER BY id")?;
+        let rows = stmt.query_map([], |r| r.get(0))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Changes whenever another connection commits; this connection's own writes leave it as is.
+    pub fn data_version(&self) -> Result<i64> {
+        Ok(self.conn.query_row("PRAGMA data_version", [], |r| r.get(0))?)
+    }
+
+    pub fn sounds_named(&self, name: &str) -> Result<Vec<i64>> {
+        let mut stmt = self.conn.prepare("SELECT id FROM sounds WHERE name = ?1 ORDER BY id")?;
+        let rows = stmt.query_map([name], |r| r.get(0))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// An existing id, else an exact (trimmed) name that only one sound has.
+    pub fn find_sound(&self, reference: &str) -> Result<i64> {
+        let reference = reference.trim();
+        if let Ok(id) = reference.parse::<i64>() {
+            let exists: Option<i64> = self.conn.query_row("SELECT id FROM sounds WHERE id = ?1", [id], |r| r.get(0)).optional()?;
+            if exists.is_some() {
+                return Ok(id);
+            }
+        }
+        match self.sounds_named(reference)?.as_slice() {
+            [] => bail!("no sound with id or name `{reference}`; `sfxc-cli list` shows them"),
+            [id] => Ok(*id),
+            ids => {
+                let ids: Vec<String> = ids.iter().map(i64::to_string).collect();
+                bail!("{} sounds are named `{reference}` (ids {}); use an id", ids.len(), ids.join(", "))
+            }
+        }
+    }
+
+    pub fn version_owner(&self, version_id: i64) -> Result<Option<i64>> {
+        Ok(self.conn.query_row("SELECT sound_id FROM versions WHERE id = ?1", [version_id], |r| r.get(0)).optional()?)
+    }
+
+    pub fn draft_json_if_exists(&self, id: i64) -> Result<Option<String>> {
+        Ok(self.conn.query_row("SELECT draft_json FROM sounds WHERE id = ?1", [id], |r| r.get(0)).optional()?)
     }
 
     fn init(conn: Connection) -> Result<Self> {
@@ -477,5 +542,95 @@ mod tests {
         drop(release.join().unwrap());
         drop(cli);
         let _ = std::fs::remove_file(&path);
+    }
+
+    use sfxc_core::export::{ExportFormat, ExportOptions};
+
+    #[test]
+    fn migration_3_upgrades_a_v2_library() {
+        let path = temp_db("v2");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY)").unwrap();
+            for (i, sql) in MIGRATIONS[..2].iter().enumerate() {
+                conn.execute_batch(sql).unwrap();
+                conn.execute("INSERT INTO schema_migrations (version) VALUES (?1)", [i as i64 + 1]).unwrap();
+            }
+            conn.execute(
+                "INSERT INTO sounds (name, created_at, updated_at, draft_json) VALUES ('old', 1, 1, ?1)",
+                [SoundPatch::default().to_json()],
+            )
+            .unwrap();
+        }
+        let s = Store::open(&path).unwrap();
+        let id = s.find_sound("old").unwrap();
+        assert_eq!(s.export_link(id).unwrap(), None);
+        drop(s);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn export_link_round_trip_and_listing() {
+        let s = Store::open_in_memory().unwrap();
+        let a = s.create_sound("a", &patch(300.0), 10).unwrap();
+        let _b = s.create_sound("b", &patch(300.0), 10).unwrap();
+        let link = ExportLink {
+            path: "/tmp/sfx/a.ogg".into(),
+            options: ExportOptions { format: ExportFormat::Ogg { quality: 5.0 }, ..Default::default() },
+        };
+        s.set_export_link(a, &link).unwrap();
+        assert_eq!(s.export_link(a).unwrap(), Some(link));
+        assert_eq!(s.linked_sounds().unwrap(), vec![a]);
+    }
+
+    #[test]
+    fn find_sound_by_id_then_exact_name() {
+        let s = Store::open_in_memory().unwrap();
+        let jump = s.create_sound("Player jump", &patch(300.0), 10).unwrap();
+        let numeric = s.create_sound("4242", &patch(300.0), 10).unwrap();
+        let named_like_jump_id = s.create_sound(&jump.to_string(), &patch(300.0), 10).unwrap();
+        assert_eq!(s.find_sound("Player jump").unwrap(), jump);
+        assert_eq!(s.find_sound(" Player jump ").unwrap(), jump);
+        assert_eq!(s.find_sound(&jump.to_string()).unwrap(), jump, "an existing id wins over a name");
+        assert_eq!(s.find_sound("4242").unwrap(), numeric, "no sound has id 4242, so the name matches");
+        assert_ne!(named_like_jump_id, jump);
+        let missing = s.find_sound("nope").unwrap_err().to_string();
+        assert!(missing.contains("nope"), "{missing}");
+    }
+
+    #[test]
+    fn find_sound_refuses_an_ambiguous_name() {
+        let s = Store::open_in_memory().unwrap();
+        let a = s.create_sound("twin", &patch(300.0), 10).unwrap();
+        let b = s.create_sound("twin", &patch(300.0), 10).unwrap();
+        assert_eq!(s.sounds_named("twin").unwrap(), vec![a, b]);
+        let err = s.find_sound("twin").unwrap_err().to_string();
+        assert!(err.contains(&a.to_string()) && err.contains(&b.to_string()), "{err}");
+    }
+
+    #[test]
+    fn data_version_moves_only_for_other_connections() {
+        let path = temp_db("dv");
+        let gui = Store::open(&path).unwrap();
+        let before = gui.data_version().unwrap();
+        gui.create_sound("own", &patch(300.0), 1).unwrap();
+        assert_eq!(gui.data_version().unwrap(), before, "own writes do not count");
+        let cli = Store::open(&path).unwrap();
+        cli.create_sound("other", &patch(300.0), 2).unwrap();
+        assert_ne!(gui.data_version().unwrap(), before);
+        drop((gui, cli));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn version_owner_and_optional_draft() {
+        let s = Store::open_in_memory().unwrap();
+        let id = s.create_sound("a", &patch(300.0), 10).unwrap();
+        let v = s.current_version_id(id).unwrap().unwrap();
+        assert_eq!(s.version_owner(v).unwrap(), Some(id));
+        assert_eq!(s.version_owner(v + 100).unwrap(), None);
+        assert_eq!(s.draft_json_if_exists(id).unwrap(), Some(patch(300.0).to_json()));
+        s.delete_sound(id).unwrap();
+        assert_eq!(s.draft_json_if_exists(id).unwrap(), None);
     }
 }
