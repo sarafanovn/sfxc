@@ -4,3 +4,4 @@
 *.db-shm
 .DS_Store
 .superpowers
+docs/superpowers/
