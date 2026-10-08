@@ -3,7 +3,7 @@ pub mod patch;
 pub mod osc;
 pub mod pitch;
 pub mod env;
-pub mod filter;
+pub mod eq;
 pub mod fx;
 pub mod mode;
 pub mod render;

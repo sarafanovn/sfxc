@@ -41,7 +41,7 @@ pub fn map_source_to_mode(source: &Source, mode: Mode) -> Source {
 
 /// One-line note for the UI when switching mode changed the source.
 pub fn describe_mapping(from: &Source, to: &Source) -> Option<String> {
-    (from != to).then(|| format!("{} → {} (8-bit)", from.label(), to.label()))
+    (from != to).then(|| format!("8-bit mode changed {} to {}", from.label(), to.label()))
 }
 
 /// Mode-specific coloration applied after the master effects.

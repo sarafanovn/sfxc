@@ -4,6 +4,7 @@ mod accent;
 mod arp;
 mod controls;
 mod editor;
+mod eq_graph;
 mod effects;
 mod export_dialog;
 mod library;
@@ -26,7 +27,7 @@ use crate::audio::{self, Player};
 use crate::history::History;
 use crate::render_worker::{RenderJob, RenderResult, RenderWorker};
 use crate::store::{SoundSummary, Store, VersionInfo};
-use export_dialog::{ExportDialog, Outcome};
+use export_dialog::ExportDialog;
 use library::Prefs;
 use theme::ThemeChoice;
 use widgets::{button, dialog, Kind};
@@ -81,6 +82,7 @@ pub enum Action {
     Undo,
     Redo,
     AskVersionNote,
+    CommitVersion(String),
     Restore(i64),
     DuplicateVersion(i64),
     DuplicateCurrent,
@@ -88,6 +90,7 @@ pub enum Action {
     SetTheme(ThemeChoice),
     SetScale(f32),
     SaveVolume,
+    SetAutoplay(bool),
     SaveSectionOrder(String),
     SetAccent { hue: f32, persist: bool },
 }
@@ -132,10 +135,8 @@ pub struct SfxcApp {
     generation: u64,
     rendered: Option<RenderResult>,
     play_when_ready: Option<u64>,
-    autoplay: bool,
     mode_note: Option<String>,
     export_settings: ExportDialog,
-    export_open: bool,
     note_prompt: Option<String>,
     confirm_delete: Option<i64>,
     toasts: Vec<Toast>,
@@ -149,7 +150,7 @@ impl SfxcApp {
         let worker = RenderWorker::spawn(move || ctx.request_repaint());
         let mut app = Self {
             ctx: cc.egui_ctx.clone(),
-            prefs: Prefs { theme: ThemeChoice::Auto, scale: 1.0, volume: audio::DEFAULT_VOLUME, accent_hue: accent::DEFAULT_HUE },
+            prefs: Prefs { theme: ThemeChoice::Auto, scale: 1.0, volume: audio::DEFAULT_VOLUME, accent_hue: accent::DEFAULT_HUE, autoplay: true },
             db_path,
             store: None,
             store_error: None,
@@ -165,10 +166,8 @@ impl SfxcApp {
             generation: 0,
             rendered: None,
             play_when_ready: None,
-            autoplay: true,
             mode_note: None,
             export_settings: ExportDialog::default(),
-            export_open: false,
             note_prompt: None,
             confirm_delete: None,
             toasts: Vec::new(),
@@ -198,11 +197,15 @@ impl SfxcApp {
         if let Some(v) = store.setting("playback_volume").ok().flatten().and_then(|s| audio::parse_volume(&s)) {
             self.prefs.volume = v;
         }
+        if let Some(a) = store.setting("autoplay").ok().flatten() {
+            self.prefs.autoplay = a != "0";
+        }
         if let Some(h) = store.setting("accent_hue").ok().flatten().and_then(|s| accent::parse_hue(&s)) {
             self.prefs.accent_hue = h;
         }
         if let Some(saved) = store.setting("section_order").ok().flatten() {
-            let order = order::restore(&saved, &editor::SETTINGS);
+            // The old "filter" card became the equalizer; keep its place in a saved order.
+            let order = order::restore(&saved.replace("filter", "eq"), &editor::SETTINGS);
             self.ctx.data_mut(|d| d.insert_temp(egui::Id::new("settings_order"), order));
         }
         self.player.set_volume(self.prefs.volume);
@@ -435,8 +438,8 @@ impl SfxcApp {
     }
 
     fn run_export(&mut self) {
-        let opts = self.export_settings.options();
         let (Some(store), Some(cur)) = (&self.store, &self.current) else { return };
+        let opts = self.export_settings.options(cur.patch.mode);
         let ext = opts.format.extension();
         let file_name: String = cur.name.chars().map(|c| if matches!(c, '/' | ':' | '\\') { '_' } else { c }).collect();
         let mut dialog = rfd::FileDialog::new()
@@ -466,7 +469,8 @@ impl SfxcApp {
         self.worker.request(RenderJob {
             generation: self.generation,
             patch: cur.patch.clone(),
-            sample_rate: self.player.sample_rate(),
+            sample_rate: self.export_settings.sample_rate,
+            play_rate: self.player.sample_rate(),
         });
     }
 
@@ -499,7 +503,7 @@ impl SfxcApp {
         cur.changed_at = Some(Instant::now());
         self.mode_note = None;
         self.request_render();
-        if self.autoplay {
+        if self.prefs.autoplay {
             self.play();
         }
     }
@@ -550,7 +554,7 @@ impl SfxcApp {
             && self.current.as_ref().is_some_and(|c| c.patch != base)
         {
             self.history.push(base);
-            if self.autoplay {
+            if self.prefs.autoplay {
                 self.play();
             }
         }
@@ -575,10 +579,18 @@ impl SfxcApp {
                     self.note_prompt = Some(String::new());
                 }
             }
+            Action::CommitVersion(note) => {
+                self.note_prompt = None;
+                self.commit_version(note.trim(), false);
+            }
             Action::Restore(v) => self.restore(v),
             Action::DuplicateVersion(v) => self.duplicate_version(v),
             Action::DuplicateCurrent => self.duplicate_current(),
-            Action::Export => self.export_open = self.current.is_some(),
+            Action::Export => {
+                if self.current.is_some() {
+                    self.run_export();
+                }
+            }
             Action::SetTheme(t) => {
                 self.prefs.theme = t;
                 self.apply_prefs();
@@ -597,6 +609,10 @@ impl SfxcApp {
                 }
             }
             Action::SaveSectionOrder(order) => self.save_pref("section_order", &order),
+            Action::SetAutoplay(on) => {
+                self.prefs.autoplay = on;
+                self.save_pref("autoplay", if on { "1" } else { "0" });
+            }
             Action::SaveVolume => {
                 let v = self.prefs.volume.to_string();
                 self.save_pref("playback_volume", &v);
@@ -619,10 +635,9 @@ impl SfxcApp {
             self.rendered = Some(r);
         }
         // Device sample rate changed (e.g. after reconnect): re-render for playback.
-        let stale_rate = self
-            .rendered
-            .as_ref()
-            .is_some_and(|r| r.generation == self.generation && r.sample_rate != self.player.sample_rate());
+        let stale_rate = self.rendered.as_ref().is_some_and(|r| {
+            r.generation == self.generation && (r.sample_rate != self.player.sample_rate() || r.render_rate != self.export_settings.sample_rate)
+        });
         if stale_rate {
             self.request_render();
         }
@@ -663,54 +678,6 @@ impl SfxcApp {
     }
 
     fn dialogs(&mut self, ctx: &egui::Context) {
-        if self.export_open {
-            match export_dialog::show(ctx, &mut self.export_settings) {
-                Outcome::Open => {}
-                Outcome::Cancel => self.export_open = false,
-                Outcome::Export => {
-                    self.export_open = false;
-                    self.run_export();
-                }
-            }
-        }
-        if let Some(note) = self.note_prompt.as_mut() {
-            let mut done = None;
-            let modal = egui::Modal::new(egui::Id::new("version_note")).show(ctx, |ui| {
-                let mut enter = false;
-                let (save, cancel) = dialog(
-                    ui,
-                    "Save version",
-                    |ui| {
-                        let r = ui.add(
-                            egui::TextEdit::singleline(note)
-                                .hint_text("What changed? (optional)")
-                                .desired_width(f32::INFINITY)
-                                .margin(egui::Margin::symmetric(8, 6)),
-                        );
-                        r.request_focus();
-                        enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                    },
-                    |ui| {
-                        let save = button(ui, Kind::Primary, None, "Save").clicked();
-                        (save, button(ui, Kind::Secondary, None, "Cancel").clicked())
-                    },
-                );
-                if save || enter {
-                    done = Some(true);
-                } else if cancel {
-                    done = Some(false);
-                }
-            });
-            if done.is_none() && modal.should_close() {
-                done = Some(false);
-            }
-            if let Some(save) = done {
-                let note = self.note_prompt.take().unwrap_or_default();
-                if save {
-                    self.commit_version(note.trim(), false);
-                }
-            }
-        }
         if let Some(id) = self.confirm_delete {
             let name = self.sounds.iter().find(|s| s.id == id).map(|s| s.name.clone()).unwrap_or_default();
             let mut done = None;
@@ -880,16 +847,18 @@ impl eframe::App for SfxcApp {
             .show_separator_line(false)
             .frame(side(18))
             .show(ui, |ui| {
-                versions::show(ui, &self.versions, self.current_version, self.current.is_some(), now, &mut actions);
+                versions::show(ui, &self.versions, self.current_version, self.current.is_some(), now, &mut self.note_prompt, &mut actions);
             });
         let progress = self.player.progress();
         if progress.is_some() {
             ctx.request_repaint();
         }
         let mut before = None;
+        let mut rate_changed = false;
         egui::CentralPanel::default().frame(egui::Frame::new().fill(p.canvas)).show(ui, |ui| match self.current.as_mut() {
             Some(cur) => {
                 let snapshot = cur.patch.clone();
+                let rate = self.export_settings.sample_rate;
                 let view = editor::View {
                     rendered: self.rendered.as_ref().map(|r| (r.samples.as_slice(), r.sample_rate)),
                     progress,
@@ -897,9 +866,12 @@ impl eframe::App for SfxcApp {
                     can_redo: self.history.can_redo(),
                     audio_error: self.player.error(),
                 };
-                editor::show(ui, cur, &view, &mut self.autoplay, &mut self.mode_note, &mut actions);
+                editor::show(ui, cur, &view, &mut self.export_settings, &mut self.mode_note, &mut actions);
                 if cur.patch != snapshot {
                     before = Some(snapshot);
+                }
+                if self.export_settings.sample_rate != rate {
+                    rate_changed = true;
                 }
             }
             None => {
@@ -920,6 +892,13 @@ impl eframe::App for SfxcApp {
         self.player.set_volume(self.prefs.volume);
 
         self.after_edit(before, &ctx);
+        if rate_changed {
+            // The rate is not part of the patch (no undo step), but the preview is rendered at it.
+            self.request_render();
+            if self.prefs.autoplay {
+                self.play();
+            }
+        }
         self.dialogs(&ctx);
         for a in actions {
             self.apply(a);
@@ -995,7 +974,7 @@ mod render_smoke {
 
     fn frame(ctx: &egui::Context, cur: &mut Current, t: &mut f64, events: Vec<Event>, actions: &mut Vec<Action>) {
         let samples = vec![0.1f32; 4800];
-        let (mut auto, mut note) = (true, None);
+        let mut note = None;
         *t += 0.016;
         let input = egui::RawInput {
             screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 2800.0))),
@@ -1012,7 +991,7 @@ mod render_smoke {
                     can_redo: false,
                     audio_error: None,
                 };
-                editor::show(ui, cur, &view, &mut auto, &mut note, actions);
+                editor::show(ui, cur, &view, &mut ExportDialog::default(), &mut note, actions);
             });
         });
         out.textures_delta.clear();
@@ -1037,7 +1016,7 @@ mod render_smoke {
         widgets::test_support::take_grips();
         frame(&ctx, &mut cur, &mut t, vec![], &mut actions);
         let grips = widgets::test_support::take_grips();
-        assert!(grips.len() >= 6, "expected a handle per settings section, got {}", grips.len());
+        assert!(grips.len() >= 5, "expected a handle per settings section, got {}", grips.len());
         let start = grips[0].center();
         let press = |pressed| Event::PointerButton { pos: start, button: PointerButton::Primary, pressed, modifiers: Default::default() };
         frame(&ctx, &mut cur, &mut t, vec![Event::PointerMoved(start)], &mut actions);
@@ -1051,10 +1030,10 @@ mod render_smoke {
         frame(&ctx, &mut cur, &mut t, vec![], &mut actions);
         let saved = actions.iter().find_map(|a| if let Action::SaveSectionOrder(s) = a { Some(s.clone()) } else { None });
         let saved = saved.expect("dropping on another card should save a new order");
-        assert!(!saved.starts_with("source,"), "source should have moved down, got {saved}");
+        assert!(!saved.starts_with("generate,"), "the first card should have moved down, got {saved}");
     }
 
-    /// Effects are horizontal cards; dragging one by its handle onto another reorders the chain.
+    /// Effects are cards in a horizontal strip; dragging one by its handle onto another reorders the chain.
     #[test]
     fn dragging_an_effect_card_reorders_the_chain() {
         use eframe::egui::PointerButton;
@@ -1075,17 +1054,17 @@ mod render_smoke {
         widgets::test_support::take_grips();
         frame(&ctx, &mut cur, &mut t, vec![], &mut actions);
         let grips = widgets::test_support::take_grips();
-        assert_eq!(grips.len(), 6 + 3, "six settings sections (effects among them) and three effect cards");
-        let start = grips[6].center();
+        assert_eq!(grips.len(), 5 + 3, "five settings sections (effects among them) and three effect cards");
+        let start = grips[5].center();
         let button = |pos, pressed| Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Default::default() };
         frame(&ctx, &mut cur, &mut t, vec![Event::PointerMoved(start)], &mut actions);
         frame(&ctx, &mut cur, &mut t, vec![button(start, true)], &mut actions);
-        let mut at = start;
-        for _ in 0..10 {
-            at.x += 45.0;
+        let target = grips[7].center();
+        for k in 1..=10 {
+            let at = start.lerp(target, k as f32 / 10.0);
             frame(&ctx, &mut cur, &mut t, vec![Event::PointerMoved(at)], &mut actions);
         }
-        frame(&ctx, &mut cur, &mut t, vec![button(at, false)], &mut actions);
+        frame(&ctx, &mut cur, &mut t, vec![button(target, false)], &mut actions);
         frame(&ctx, &mut cur, &mut t, vec![], &mut actions);
         let ids: Vec<u64> = cur.patch.master_effects.iter().map(|e| e.id).collect();
         assert_eq!(ids, vec![2, 3, 1], "first card dropped on the third");
@@ -1111,7 +1090,8 @@ mod render_smoke {
         widgets::test_support::take_grips();
         frame(&ctx, &mut cur, &mut t, vec![], &mut actions);
         let grip = *widgets::test_support::take_grips().last().expect("effect handle");
-        let title = grip.center() + vec2(40.0, 0.0);
+        // The name runs down the rail under the handle and the caret.
+        let title = grip.center() + vec2(0.0, 110.0);
         let button = |pressed| Event::PointerButton { pos: title, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
         frame(&ctx, &mut cur, &mut t, vec![Event::PointerMoved(title)], &mut actions);
         frame(&ctx, &mut cur, &mut t, vec![button(true)], &mut actions);
@@ -1127,7 +1107,7 @@ mod render_smoke {
         use eframe::egui::PointerButton;
         let ctx = egui::Context::default();
         theme::install(&ctx);
-        let (mut t, mut prefs, mut actions) = (0.0f64, Prefs { theme: ThemeChoice::Auto, scale: 1.0, volume: 0.2, accent_hue: accent::DEFAULT_HUE }, Vec::new());
+        let (mut t, mut prefs, mut actions) = (0.0f64, Prefs { theme: ThemeChoice::Auto, scale: 1.0, volume: 0.2, accent_hue: accent::DEFAULT_HUE, autoplay: true }, Vec::new());
         let mut button_rect = Rect::NOTHING;
         let mut run = |events: Vec<Event>, prefs: &mut Prefs, actions: &mut Vec<Action>, button_rect: &mut Rect| {
             t += 0.05;
@@ -1189,7 +1169,7 @@ mod render_smoke {
             kind: sfxc_core::patch::EffectKind::all_defaults()[0],
         });
         let samples = vec![0.1f32; 4800];
-        let (mut auto, mut note) = (true, None);
+        let mut note = None;
         let mut t = 0.0f64;
         for gy in 0..28 {
             for gx in 0..12 {
@@ -1209,7 +1189,7 @@ mod render_smoke {
                             can_redo: false,
                             audio_error: None,
                         };
-                        editor::show(ui, &mut cur, &view, &mut auto, &mut note, &mut Vec::new());
+                        editor::show(ui, &mut cur, &view, &mut ExportDialog::default(), &mut note, &mut Vec::new());
                     });
                 });
                 out.textures_delta.clear();

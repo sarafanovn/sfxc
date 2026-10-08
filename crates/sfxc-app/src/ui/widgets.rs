@@ -1,7 +1,7 @@
 //! Shared components drawn with the theme tokens.
 
 use eframe::egui::{
-    self, Align, Align2, Color32, CornerRadius, CursorIcon, FontId, Frame, Layout, Margin, Pos2, Rect, Response, RichText,
+    self, Align, Align2, Color32, CursorIcon, FontId, Frame, Layout, Margin, Pos2, Rect, Response, RichText,
     Sense, Shadow, Shape, Stroke, TextStyle, Ui, Vec2, WidgetText,
 };
 use egui_phosphor::regular as icon;
@@ -95,7 +95,7 @@ fn param_row<N: Numeric>(ui: &mut Ui, label: &str, v: &mut N, lo: N, hi: N, defa
 }
 
 /// Dropdown in the same material as the other fields: recessed well, phosphor caret.
-pub fn select<R>(ui: &mut Ui, id_salt: &str, selected: &str, add: impl FnOnce(&mut Ui) -> R) -> Option<R> {
+pub fn select<R>(ui: &mut Ui, id_salt: &str, selected: impl Into<egui::WidgetText>, add: impl FnOnce(&mut Ui) -> R) -> egui::InnerResponse<Option<R>> {
     let p = palette(ui);
     ui.scope(|ui| {
         let w = &mut ui.visuals_mut().widgets;
@@ -112,7 +112,31 @@ pub fn select<R>(ui: &mut Ui, id_salt: &str, selected: &str, add: impl FnOnce(&m
                 ui.painter().text(rect.center(), Align2::CENTER_CENTER, glyph, FontId::proportional(14.0), p.muted);
             })
             .show_ui(ui, add)
-            .inner
+    })
+    .inner
+}
+
+/// Fixed-width dropdown over a small set of values. Returns true when the choice changed.
+pub fn dropdown<T: PartialEq + Copy>(ui: &mut Ui, id_salt: &str, width: f32, value: &mut T, options: &[(T, &str)]) -> bool {
+    let before = *value;
+    let current = options.iter().find(|(v, _)| *v == *value).map_or("—", |(_, l)| *l);
+    ui.allocate_ui(Vec2::new(width, 30.0), |ui| {
+        select(ui, id_salt, current, |ui| {
+            for (v, l) in options {
+                ui.selectable_value(value, *v, *l);
+            }
+        });
+    });
+    *value != before
+}
+
+/// Short muted label followed by its control, kept together when a row wraps.
+pub fn field<R>(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let p = palette(ui);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        ui.label(RichText::new(label).size(12.5).color(p.muted));
+        add(ui)
     })
     .inner
 }
@@ -125,12 +149,29 @@ pub enum Kind {
     Danger,
 }
 
-/// Button with optional leading icon. Bulges on hover and sinks on press.
+/// Button with optional leading icon. Flat label that lifts on hover and sinks on press; `kind` only picks the label color.
 pub fn button(ui: &mut Ui, kind: Kind, icon: Option<&str>, text: &str) -> Response {
+    button_min_width(ui, kind, icon, text, 0.0)
+}
+
+/// Natural width of a [`button`] with this label, for sizing a group of buttons alike.
+pub fn button_width(ui: &Ui, icon: Option<&str>, text: &str) -> f32 {
+    let label = match icon {
+        Some(i) if text.is_empty() => i.to_string(),
+        Some(i) => format!("{i}  {text}"),
+        None => text.to_string(),
+    };
+    let galley = ui.painter().layout_no_wrap(label, FontId::proportional(13.0), Color32::PLACEHOLDER);
+    let pad = if text.is_empty() { 8.0 } else { 18.0 };
+    (galley.size().x + pad * 2.0).max(36.0)
+}
+
+/// Like [`button`], at least `min_width` wide with the label centered.
+pub fn button_min_width(ui: &mut Ui, kind: Kind, icon: Option<&str>, text: &str, min_width: f32) -> Response {
     let p = palette(ui);
     let fg = |hovered: bool| match kind {
-        Kind::Primary => p.on_accent,
-        Kind::Danger => Color32::WHITE,
+        Kind::Primary => p.accent_text,
+        Kind::Danger => p.danger,
         Kind::Secondary => p.text,
         Kind::Ghost if hovered => p.text,
         Kind::Ghost => p.muted,
@@ -143,23 +184,14 @@ pub fn button(ui: &mut Ui, kind: Kind, icon: Option<&str>, text: &str) -> Respon
     };
     let galley = ui.painter().layout_no_wrap(label, font, Color32::PLACEHOLDER);
     let pad = if text.is_empty() { Vec2::splat(8.0) } else { Vec2::new(18.0, 8.0) };
-    let size = (galley.size() + pad * 2.0).max(Vec2::new(36.0, 36.0));
+    let size = (galley.size() + pad * 2.0).max(Vec2::new(36.0f32.max(min_width), 36.0));
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
     if ui.is_rect_visible(rect) {
         let m = Motion::of(ui, &resp);
         let painter = ui.painter();
-        match kind {
-            Kind::Secondary => material::raised(painter, rect, R_CONTROL as f32, &p, &m),
-            Kind::Ghost => {
-                if m.hover > 0.0 {
-                    material::raised(painter, rect, R_CONTROL as f32, &p, &m);
-                }
-            }
-            Kind::Primary | Kind::Danger => {
-                let base = if kind == Kind::Primary { p.accent } else { p.danger };
-                let fill = base.lerp_to_gamma(if kind == Kind::Primary { p.accent_hover } else { Color32::BLACK }, 0.15 * m.hover);
-                material::raised(painter, rect, R_CONTROL as f32, &Palette { raised: fill, ..p }, &m);
-            }
+        // Flat text at rest; the button lifts off the surface on hover and sinks on press.
+        if m.hover > 0.0 || m.press > 0.0 {
+            material::raised(painter, rect, R_CONTROL as f32, &p, &m);
         }
         let hovered = m.hover > 0.5;
         let offset = Vec2::splat(m.press.clamp(0.0, 1.0));
@@ -233,6 +265,27 @@ pub fn toggle(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
         let pos = Pos2::new(track_rect.right() + 8.0, rect.center().y - g.size().y / 2.0);
         painter.galley(pos, g, p.text);
     }
+    resp.on_hover_cursor(CursorIcon::PointingHand)
+}
+
+/// Square power button: sunken and dim when off, raised with an accent icon when on.
+pub fn power_toggle(ui: &mut Ui, on: &mut bool) -> Response {
+    let p = palette(ui);
+    let (rect, mut resp) = ui.allocate_exact_size(Vec2::splat(28.0), Sense::click());
+    if resp.clicked() {
+        *on = !*on;
+        resp.mark_changed();
+    }
+    let t = ui.ctx().animate_bool_responsive(resp.id, *on);
+    let m = Motion::of(ui, &resp);
+    let painter = ui.painter();
+    if *on {
+        material::raised(painter, rect, R_CONTROL as f32, &p, &m);
+    } else {
+        material::recessed(painter, rect, R_CONTROL as f32, &p, 0.6);
+    }
+    let color = p.faint.lerp_to_gamma(p.accent_text, t);
+    painter.text(rect.center(), Align2::CENTER_CENTER, egui_phosphor::regular::POWER, FontId::proportional(14.0), color);
     resp.on_hover_cursor(CursorIcon::PointingHand)
 }
 
@@ -524,7 +577,9 @@ pub fn play_button(ui: &mut Ui, playing: bool) -> Response {
 }
 
 /// Filled waveform with a playhead. `progress` is the played fraction while audio runs.
-pub fn waveform(ui: &mut Ui, rendered: Option<(&[f32], u32)>, progress: Option<f32>, height: f32) {
+/// `axis_secs` fixes the length of the time axis (a fixed export length): the sound is cut or padded with
+/// silence to it, and the time label shows that length. `None` shows the sound's own length.
+pub fn waveform(ui: &mut Ui, rendered: Option<(&[f32], u32)>, progress: Option<f32>, height: f32, axis_secs: Option<f32>) {
     let p = palette(ui);
     let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), height), Sense::hover());
     let painter = ui.painter_at(rect);
@@ -537,9 +592,12 @@ pub fn waveform(ui: &mut Ui, rendered: Option<(&[f32], u32)>, progress: Option<f
     };
     let inner = rect.shrink2(Vec2::new(8.0, 10.0));
     let cols = inner.width().max(1.0) as usize;
-    let per = (samples.len() as f32 / cols as f32).max(1.0);
+    let own_secs = samples.len() as f32 / sample_rate as f32;
+    let axis_secs = axis_secs.filter(|s| *s > 0.0).unwrap_or(own_secs);
+    let total = (axis_secs * sample_rate as f32).max(1.0);
+    let per = (total / cols as f32).max(1.0);
     let half = inner.height() / 2.0;
-    let head_x = progress.map(|t| inner.left() + t * inner.width());
+    let head_x = progress.map(|t| inner.left() + (t * own_secs / axis_secs).min(1.0) * inner.width());
     let played = p.accent;
     let unplayed = if progress.is_some() { p.accent.gamma_multiply(0.45) } else { p.accent.gamma_multiply(0.85) };
     let mut shapes = Vec::with_capacity(cols);
@@ -559,7 +617,7 @@ pub fn waveform(ui: &mut Ui, rendered: Option<(&[f32], u32)>, progress: Option<f
     if let Some(x) = head_x {
         painter.vline(x, rect.y_range().shrink(4.0), Stroke::new(1.5, p.text));
     }
-    let label = format!("{:.2} s", samples.len() as f32 / sample_rate as f32);
+    let label = format!("{axis_secs:.2} s");
     let galley = painter.layout_no_wrap(label, FontId::monospace(11.0), p.muted);
     let at = rect.right_bottom() - galley.size() - Vec2::new(8.0, 6.0);
     painter.rect_filled(Rect::from_min_size(at, galley.size()).expand2(Vec2::new(5.0, 2.0)), 4.0, p.well);
@@ -585,21 +643,6 @@ pub fn dialog<R>(ui: &mut Ui, title: &str, body: impl FnOnce(&mut Ui), actions: 
     body(ui);
     ui.add_space(20.0);
     ui.with_layout(Layout::right_to_left(Align::Center), actions).inner
-}
-
-/// Paints a rounded rect behind a list row and returns its interaction.
-pub fn row_background(ui: &Ui, rect: Rect, resp: &Response, selected: bool) {
-    let p = palette(ui);
-    let radius = R_CONTROL as f32;
-    if selected {
-        material::recessed(ui.painter(), rect, radius, &p, 0.5);
-        ui.painter().rect_filled(rect, CornerRadius::same(R_CONTROL), p.accent_soft.gamma_multiply(0.55));
-    } else {
-        let m = Motion::of(ui, resp);
-        if m.hover > 0.01 {
-            material::raised(ui.painter(), rect, radius, &p, &m);
-        }
-    }
 }
 
 /// Sunken area that holds a list; content is inset so row shadows stay inside.

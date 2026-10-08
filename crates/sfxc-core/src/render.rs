@@ -1,7 +1,7 @@
 //! Offline renderer: patch → mono f32 samples at the requested sample rate.
 
 use crate::env;
-use crate::filter::{self, Svf};
+use crate::eq::EqFilter;
 use crate::fx::FxChain;
 use crate::mode::{map_source_to_mode, Limiter, OutputStage};
 use crate::osc::Oscillator;
@@ -27,13 +27,13 @@ pub fn render(patch: &SoundPatch, sample_rate: u32) -> Vec<f32> {
         let source = map_source_to_mode(&layer.source, patch.mode);
         let seed = patch.seed.wrapping_add((i as u64).wrapping_mul(0x9E37_79B9));
         let mut osc = Oscillator::new(source, patch.mode, sr, seed);
-        let mut svf = Svf::default();
+        let mut eq = EqFilter::new(&layer.eq, sr);
         let mut fx = FxChain::new(&layer.effects, sr);
         for (k, sample) in out.iter_mut().enumerate() {
             let t = k as f32 / sr;
             let freq = pitch::freq_at(&layer.pitch, patch.mode, t, sr);
             let s = osc.next(freq, t);
-            let s = svf.process(s, layer.filter.kind, filter::cutoff_at(&layer.filter, t), layer.filter.resonance, sr);
+            let s = eq.process(s);
             let mut a = env::amp(&layer.env, t);
             if patch.mode == Mode::Bit8 {
                 a = (a * 15.0).round() / 15.0;
@@ -65,7 +65,7 @@ pub fn trim_tail(samples: &mut Vec<f32>, threshold: f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::patch::{Effect, EffectKind, Filter, FilterKind, Mode, NoiseKind, Source, MAX_SECONDS};
+    use crate::patch::{Effect, EffectKind, Equalizer, Mode, NoiseKind, Source, MAX_SECONDS};
     use proptest::prelude::*;
 
     #[test]
@@ -141,7 +141,7 @@ mod tests {
         fn any_patch_is_finite_and_bounded(
             base in 20.0f32..5000.0,
             slide in -8.0f32..8.0,
-            res in 0.0f32..1.0,
+            gain_db in -12.0f32..12.0,
             mode_i in 0usize..3,
             src_i in 0usize..6,
             fx_on: bool,
@@ -152,7 +152,7 @@ mod tests {
             l.source = Source::default_of_kind(Source::KIND_NAMES[src_i]);
             l.pitch.base_freq = base;
             l.pitch.slide = slide;
-            l.filter = Filter { kind: FilterKind::LowPass, cutoff: 2000.0, resonance: res, sweep: 1.0 };
+            l.eq = Equalizer { enabled: true, gains: [gain_db; 6] };
             l.gain = 2.0;
             if fx_on {
                 p.master_effects = EffectKind::all_defaults()

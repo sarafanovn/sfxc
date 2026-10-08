@@ -74,13 +74,19 @@ fn tonal(rng: &mut Rng, mode: Mode, choices: &[u8]) -> Source {
         TRIANGLE => Source::Triangle,
         _ => Source::Sine,
     };
-    let s = if mode == Mode::Bit16 && rng.chance(0.4) { fm(rng) } else { s };
+    let s = if mode == Mode::Bit16 && FM_SOURCES && rng.chance(0.4) { fm(rng) } else { s };
     map_source_to_mode(&s, mode)
 }
 
 fn noise(rng: &mut Rng, mode: Mode) -> Source {
     map_source_to_mode(&Source::Noise { kind: *rng.pick(&NoiseKind::ALL) }, mode)
 }
+
+/// Arpeggios are switched off for now: generators leave `arp_steps` empty. The engine and patch fields stay.
+const ARPEGGIOS: bool = false;
+
+/// Same for FM sources: generators stick to the basic waveforms.
+const FM_SOURCES: bool = false;
 
 pub fn generate(category: Category, mode: Mode, seed: u64) -> SoundPatch {
     let mut rng = Rng::new(seed);
@@ -93,7 +99,7 @@ pub fn generate(category: Category, mode: Mode, seed: u64) -> SoundPatch {
         Category::PickupCoin => {
             l.source = tonal(r, mode, &[PULSE, TRIANGLE, SINE]);
             l.pitch.base_freq = r.range(600.0, 1500.0);
-            if r.chance(0.7) {
+            if ARPEGGIOS && r.chance(0.7) {
                 l.pitch.arp_steps = vec![0, *r.pick(&[4i8, 5, 7, 12])];
                 l.pitch.arp_speed = r.range(0.04, 0.1);
             }
@@ -112,7 +118,7 @@ pub fn generate(category: Category, mode: Mode, seed: u64) -> SoundPatch {
             l.env.release = r.range(0.05, 0.25);
             l.env.punch = r.range(0.0, 0.3);
             if r.chance(0.3) {
-                l.filter = Filter { kind: FilterKind::HighPass, cutoff: r.range(200.0, 1000.0), ..Default::default() };
+                l.eq = Equalizer::highpass(r.range(200.0, 1000.0));
             }
         }
         Category::Explosion => {
@@ -123,12 +129,7 @@ pub fn generate(category: Category, mode: Mode, seed: u64) -> SoundPatch {
             l.env.release = r.range(0.3, 0.9);
             l.env.punch = r.range(0.2, 0.8);
             if r.chance(0.6) {
-                l.filter = Filter {
-                    kind: FilterKind::LowPass,
-                    cutoff: r.range(1000.0, 5000.0),
-                    resonance: 0.0,
-                    sweep: r.range(-2.0, 0.0),
-                };
+                l.eq = Equalizer::lowpass(r.range(1000.0, 5000.0));
             }
         }
         Category::PowerUp => {
@@ -138,7 +139,7 @@ pub fn generate(category: Category, mode: Mode, seed: u64) -> SoundPatch {
             if r.chance(0.5) {
                 l.pitch.vibrato_depth = r.range(0.1, 0.5);
                 l.pitch.vibrato_rate = r.range(8.0, 20.0);
-            } else if r.chance(0.5) {
+            } else if ARPEGGIOS && r.chance(0.5) {
                 l.pitch.arp_steps = vec![0, 4, 7, 12];
                 l.pitch.arp_speed = r.range(0.04, 0.08);
             }
@@ -157,7 +158,7 @@ pub fn generate(category: Category, mode: Mode, seed: u64) -> SoundPatch {
             l.env.release = r.range(0.05, 0.2);
             l.env.punch = r.range(0.0, 0.5);
             if r.chance(0.5) {
-                l.filter = Filter { kind: FilterKind::LowPass, cutoff: r.range(2000.0, 8000.0), ..Default::default() };
+                l.eq = Equalizer::lowpass(r.range(2000.0, 8000.0));
             }
         }
         Category::Jump => {
@@ -182,7 +183,7 @@ pub fn generate(category: Category, mode: Mode, seed: u64) -> SoundPatch {
                 l.pitch.vibrato_depth = r.range(0.0, 1.0);
                 l.pitch.vibrato_rate = r.range(2.0, 20.0);
             }
-            if r.chance(0.2) {
+            if ARPEGGIOS && r.chance(0.2) {
                 let n = 2 + (r.next_u64() % 3) as usize;
                 l.pitch.arp_steps = (0..n).map(|_| r.range(-12.0, 12.0).round() as i8).collect();
                 l.pitch.arp_speed = r.range(0.03, 0.15);
@@ -196,10 +197,8 @@ pub fn generate(category: Category, mode: Mode, seed: u64) -> SoundPatch {
                 punch: r.range(0.0, 0.5),
             };
             if r.chance(0.4) {
-                let kind = *r.pick(&[FilterKind::LowPass, FilterKind::HighPass]);
                 // A high-pass far above a low tone would make the sound inaudible.
-                let cutoff = if kind == FilterKind::HighPass { r.range(100.0, 1500.0) } else { r.range(500.0, 10_000.0) };
-                l.filter = Filter { kind, cutoff, resonance: r.range(0.0, 0.7), sweep: r.range(-1.0, 1.0) };
+                l.eq = if r.chance(0.5) { Equalizer::highpass(r.range(100.0, 1500.0)) } else { Equalizer::lowpass(r.range(500.0, 10_000.0)) };
             }
         }
     }
@@ -229,9 +228,9 @@ pub fn mutate(patch: &SoundPatch, seed: u64) -> SoundPatch {
         }
         nudge(r, &mut l.env.sustain_level, ranges::UNIT);
         nudge(r, &mut l.env.punch, ranges::UNIT);
-        l.filter.cutoff *= 2f32.powf(r.bipolar() * 0.5);
-        nudge(r, &mut l.filter.resonance, ranges::UNIT);
-        nudge(r, &mut l.filter.sweep, ranges::SWEEP);
+        for g in &mut l.eq.gains {
+            *g += r.bipolar() * 1.2;
+        }
         match &mut l.source {
             Source::Pulse { duty } if p.mode == Mode::Bit8 => {
                 if r.chance(0.1) {
@@ -266,6 +265,34 @@ mod tests {
     use super::*;
     use crate::mode::is_allowed;
     use crate::render::render;
+
+    #[test]
+    fn generated_equalizers_are_in_range_and_sometimes_shaped() {
+        let mut shaped = 0;
+        for c in Category::ALL {
+            for seed in 0..40 {
+                let eq = generate(c, Mode::Modern, seed).layers[0].eq;
+                assert!(eq.enabled);
+                assert!(eq.gains.iter().all(|g| g.abs() <= crate::eq::RANGE_DB));
+                if eq.gains.iter().any(|g| g.abs() > 1.0) {
+                    shaped += 1;
+                }
+            }
+        }
+        assert!(shaped > 20, "generators should still shape some sounds, got {shaped}");
+    }
+
+    #[test]
+    fn mutate_keeps_the_equalizer_in_range_and_moves_it() {
+        let base = generate(Category::Explosion, Mode::Modern, 3);
+        let mut moved = false;
+        for seed in 0..20 {
+            let m = mutate(&base, seed);
+            assert!(m.layers[0].eq.gains.iter().all(|g| g.abs() <= crate::eq::RANGE_DB));
+            moved |= m.layers[0].eq.gains != base.layers[0].eq.gains;
+        }
+        assert!(moved);
+    }
 
     #[test]
     fn generate_uses_default_gain_and_enabled_arp() {

@@ -127,6 +127,16 @@ fn bubble(ui: &Ui, id: Id, text: &str, p: &Palette) {
 /// Horizontal fader: recessed track, accent fill, raised handle.
 #[allow(clippy::too_many_arguments)]
 pub fn track<N: Numeric>(ui: &mut Ui, v: &mut N, lo: N, hi: N, default: N, log: bool, width: f32) -> Response {
+    track_inner(ui, v, lo, hi, default, log, width, true)
+}
+
+/// Like [`track`], without the value bubble while dragging.
+pub fn track_quiet<N: Numeric>(ui: &mut Ui, v: &mut N, lo: N, hi: N, default: N, log: bool, width: f32) -> Response {
+    track_inner(ui, v, lo, hi, default, log, width, false)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn track_inner<N: Numeric>(ui: &mut Ui, v: &mut N, lo: N, hi: N, default: N, log: bool, width: f32, bubble_on_drag: bool) -> Response {
     let p = palette(ui);
     let (rect, mut resp) = ui.allocate_exact_size(vec2(width, 22.0), Sense::click_and_drag());
     let resp_c = resp.clone();
@@ -145,7 +155,7 @@ pub fn track<N: Numeric>(ui: &mut Ui, v: &mut N, lo: N, hi: N, default: N, log: 
         let handle = Rect::from_center_size(Pos2::new(x, rect.center().y), Vec2::splat(16.0));
         material::raised(painter, handle, 8.0, &Palette { raised: p.knob, ..p }, &m);
     }
-    if resp.dragged() {
+    if bubble_on_drag && resp.dragged() {
         bubble(ui, resp.id, &format_value(v.to_f64(), N::INTEGRAL, ""), &p);
     }
     resp.on_hover_cursor(CursorIcon::ResizeHorizontal)

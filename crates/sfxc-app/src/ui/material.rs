@@ -15,8 +15,6 @@ pub struct Motion {
 }
 
 impl Motion {
-    pub const REST: Motion = Motion { hover: 0.0, press: 0.0, focus: 0.0 };
-
     pub fn of(ui: &Ui, resp: &Response) -> Self {
         let ctx = ui.ctx();
         let id = resp.id;
@@ -70,7 +68,7 @@ pub fn surface(painter: &Painter, rect: Rect, radius: f32, base: Color32) {
 }
 
 /// Inner shadow: dark along the top-left inside edge, light along the bottom-right.
-fn inset(painter: &Painter, rect: Rect, radius: f32, p: &Palette, depth: f32) {
+pub fn inset(painter: &Painter, rect: Rect, radius: f32, p: &Palette, depth: f32) {
     if depth <= 0.0 {
         return;
     }

@@ -4,6 +4,8 @@
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 
+pub use crate::eq::Equalizer;
+
 pub const SCHEMA_VERSION: u32 = 1;
 pub const MAX_SECONDS: f32 = 10.0;
 pub const MAX_LAYERS: usize = 4;
@@ -23,8 +25,6 @@ pub mod ranges {
     pub const ARP_SPEED: Range = (0.01, 1.0);
     pub const ENV_TIME: Range = (0.0, 5.0);
     pub const DUTY: Range = (0.01, 0.99);
-    pub const CUTOFF: Range = (20.0, 20000.0);
-    pub const SWEEP: Range = (-8.0, 8.0);
     pub const GAIN: Range = (0.0, 2.0);
     pub const PAN: Range = (-1.0, 1.0);
     pub const FM_RATIO: Range = (0.25, 16.0);
@@ -66,7 +66,7 @@ impl Mode {
 
     pub fn label(self) -> &'static str {
         match self {
-            Mode::Modern => "Modern",
+            Mode::Modern => "24-bit",
             Mode::Bit8 => "8-bit",
             Mode::Bit16 => "16-bit",
         }
@@ -191,7 +191,7 @@ impl Source {
 
     pub fn label(&self) -> String {
         match self {
-            Source::Pulse { duty } => format!("Pulse {}%", duty * 100.0),
+            Source::Pulse { duty } => format!("Pulse {:.0}%", duty * 100.0),
             Source::Noise { kind } => format!("Noise ({})", kind.label()),
             other => other.kind_name().to_string(),
         }
@@ -253,53 +253,13 @@ impl Default for Envelope {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum FilterKind {
-    #[default]
-    Off,
-    LowPass,
-    HighPass,
-    BandPass,
-}
-
-impl FilterKind {
-    pub const ALL: [FilterKind; 4] =
-        [FilterKind::Off, FilterKind::LowPass, FilterKind::HighPass, FilterKind::BandPass];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            FilterKind::Off => "Off",
-            FilterKind::LowPass => "Low-pass",
-            FilterKind::HighPass => "High-pass",
-            FilterKind::BandPass => "Band-pass",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct Filter {
-    pub kind: FilterKind,
-    /// Hz.
-    pub cutoff: f32,
-    pub resonance: f32,
-    /// Cutoff change in octaves per second.
-    pub sweep: f32,
-}
-
-impl Default for Filter {
-    fn default() -> Self {
-        Self { kind: FilterKind::Off, cutoff: 8000.0, resonance: 0.0, sweep: 0.0 }
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Layer {
     pub source: Source,
     pub pitch: Pitch,
     pub env: Envelope,
-    pub filter: Filter,
+    pub eq: Equalizer,
     pub gain: f32,
     /// Stored for future stereo output; v1 renders mono.
     pub pan: f32,
@@ -313,7 +273,7 @@ impl Default for Layer {
             source: Source::default(),
             pitch: Pitch::default(),
             env: Envelope::default(),
-            filter: Filter::default(),
+            eq: Equalizer::default(),
             gain: 1.0,
             pan: 0.0,
             effects: Vec::new(),
@@ -356,9 +316,7 @@ impl Layer {
         }
         clamp_f(&mut e.sustain_level, UNIT);
         clamp_f(&mut e.punch, UNIT);
-        clamp_f(&mut self.filter.cutoff, CUTOFF);
-        clamp_f(&mut self.filter.resonance, UNIT);
-        clamp_f(&mut self.filter.sweep, SWEEP);
+        self.eq.clamp();
         clamp_f(&mut self.gain, GAIN);
         clamp_f(&mut self.pan, PAN);
         for fx in &mut self.effects {
@@ -557,6 +515,7 @@ impl SoundPatch {
             bail!("patch schema {version} is newer than this app supports ({SCHEMA_VERSION})");
         }
         migrate(&mut value, version);
+        filter_to_eq(&mut value);
         let mut patch: SoundPatch = serde_json::from_value(value)?;
         patch.schema_version = SCHEMA_VERSION;
         patch.clamp();
@@ -568,6 +527,29 @@ impl SoundPatch {
 /// `SCHEMA_VERSION` and add a step here: `if from < 2 { v1_to_v2(value) }`.
 fn migrate(_value: &mut serde_json::Value, _from: u32) {}
 
+/// Patches saved before the equalizer have a per-layer `filter`. It is dropped; a low-, high- or
+/// band-pass becomes a similar equalizer curve unless the layer already has an `eq`.
+fn filter_to_eq(value: &mut serde_json::Value) {
+    let Some(layers) = value.get_mut("layers").and_then(|l| l.as_array_mut()) else { return };
+    for layer in layers {
+        let Some(obj) = layer.as_object_mut() else { continue };
+        let Some(filter) = obj.remove("filter") else { continue };
+        if obj.contains_key("eq") {
+            continue;
+        }
+        let cutoff = filter.get("cutoff").and_then(|c| c.as_f64()).unwrap_or(8000.0) as f32;
+        let eq = match filter.get("kind").and_then(|k| k.as_str()) {
+            Some("LowPass") => Equalizer::lowpass(cutoff),
+            Some("HighPass") => Equalizer::highpass(cutoff),
+            Some("BandPass") => Equalizer::bandpass(cutoff),
+            _ => continue,
+        };
+        if let Ok(v) = serde_json::to_value(eq) {
+            obj.insert("eq".into(), v);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -577,6 +559,63 @@ mod tests {
         let p = SoundPatch::default();
         let back = SoundPatch::from_json(&p.to_json()).unwrap();
         assert_eq!(p, back);
+    }
+
+    #[test]
+    fn default_equalizer_is_flat_and_on() {
+        let eq = SoundPatch::default().layers[0].eq;
+        assert!(eq.enabled);
+        assert_eq!(eq.gains, [0.0; crate::eq::BANDS]);
+    }
+
+    #[test]
+    fn equalizer_round_trips_and_is_clamped() {
+        let mut p = SoundPatch::default();
+        p.layers[0].eq.gains = [3.5, -2.0, 99.0, -99.0, 0.5, 0.0];
+        p.layers[0].eq.enabled = false;
+        let back = SoundPatch::from_json(&p.to_json()).unwrap();
+        let eq = back.layers[0].eq;
+        assert!(!eq.enabled);
+        assert_eq!(eq.gains, [3.5, -2.0, 12.0, -12.0, 0.5, 0.0]);
+    }
+
+    #[test]
+    fn non_finite_equalizer_gains_become_flat() {
+        let mut p = SoundPatch::default();
+        p.layers[0].eq.gains = [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 1.0, 0.0, 0.0];
+        p.clamp();
+        assert_eq!(p.layers[0].eq.gains, [0.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+    }
+
+    /// Patches saved before the equalizer carried a `filter`; it becomes a similar curve.
+    #[test]
+    fn legacy_filter_becomes_an_equalizer_curve() {
+        let mut v: serde_json::Value = serde_json::from_str(&SoundPatch::default().to_json()).unwrap();
+        let layer = v["layers"][0].as_object_mut().unwrap();
+        layer.remove("eq");
+        layer.insert("filter".into(), serde_json::json!({ "kind": "LowPass", "cutoff": 1000.0, "resonance": 0.3, "sweep": 0.5 }));
+        let eq = SoundPatch::from_json(&v.to_string()).unwrap().layers[0].eq;
+        assert!(eq.gains[5] < -10.0 && eq.gains[0].abs() < 0.5, "{:?}", eq.gains);
+    }
+
+    #[test]
+    fn legacy_filter_off_or_missing_stays_flat() {
+        let mut v: serde_json::Value = serde_json::from_str(&SoundPatch::default().to_json()).unwrap();
+        let layer = v["layers"][0].as_object_mut().unwrap();
+        layer.remove("eq");
+        layer.insert("filter".into(), serde_json::json!({ "kind": "Off", "cutoff": 500.0 }));
+        assert_eq!(SoundPatch::from_json(&v.to_string()).unwrap().layers[0].eq.gains, [0.0; crate::eq::BANDS]);
+        v["layers"][0].as_object_mut().unwrap().remove("filter");
+        assert_eq!(SoundPatch::from_json(&v.to_string()).unwrap().layers[0].eq.gains, [0.0; crate::eq::BANDS]);
+    }
+
+    #[test]
+    fn a_saved_equalizer_wins_over_a_stale_filter() {
+        let mut v: serde_json::Value = serde_json::from_str(&SoundPatch::default().to_json()).unwrap();
+        let layer = v["layers"][0].as_object_mut().unwrap();
+        layer.insert("filter".into(), serde_json::json!({ "kind": "LowPass", "cutoff": 500.0 }));
+        layer.insert("eq".into(), serde_json::json!({ "enabled": true, "gains": [1.0, 0.0, 0.0, 0.0, 0.0, 0.0] }));
+        assert_eq!(SoundPatch::from_json(&v.to_string()).unwrap().layers[0].eq.gains[0], 1.0);
     }
 
     #[test]

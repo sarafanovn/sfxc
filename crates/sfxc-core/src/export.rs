@@ -40,11 +40,31 @@ pub struct ExportOptions {
     pub sample_rate: u32,
     pub normalize: bool,
     pub trim: bool,
+    /// Exact length in seconds. `None` keeps the sound's natural length. A longer sound is cut with a short
+    /// fade-out, a shorter one is padded with silence.
+    pub duration: Option<f32>,
 }
 
 impl Default for ExportOptions {
     fn default() -> Self {
-        Self { format: ExportFormat::Wav { bits: 16 }, sample_rate: 44_100, normalize: true, trim: true }
+        Self { format: ExportFormat::Wav { bits: 16 }, sample_rate: 44_100, normalize: true, trim: true, duration: None }
+    }
+}
+
+/// Fade applied when a sound is cut short, so the cut does not click.
+const CUT_FADE_SECONDS: f32 = 0.005;
+
+/// Makes `samples` exactly `seconds` long.
+fn fit_duration(samples: &mut Vec<f32>, seconds: f32, sample_rate: u32) {
+    let target = (seconds.max(0.0) * sample_rate as f32).round() as usize;
+    if samples.len() > target {
+        samples.truncate(target);
+        let fade = ((CUT_FADE_SECONDS * sample_rate as f32) as usize).min(target).max(1);
+        for i in 0..fade.min(target) {
+            samples[target - 1 - i] *= i as f32 / fade as f32;
+        }
+    } else {
+        samples.resize(target, 0.0);
     }
 }
 
@@ -52,6 +72,9 @@ pub fn prepare(patch: &SoundPatch, opts: &ExportOptions) -> Vec<f32> {
     let mut s = render(patch, opts.sample_rate);
     if opts.trim {
         trim_tail(&mut s, TRIM_THRESHOLD);
+    }
+    if let Some(d) = opts.duration {
+        fit_duration(&mut s, d, opts.sample_rate);
     }
     if opts.normalize {
         let peak = s.iter().fold(0.0f32, |m, v| m.max(v.abs()));
@@ -161,6 +184,18 @@ mod tests {
         let s = prepare(&SoundPatch::default(), &ExportOptions::default());
         let peak = s.iter().fold(0.0f32, |m, v| m.max(v.abs()));
         assert!((peak - NORMALIZE_PEAK).abs() < 1e-4);
+    }
+
+    #[test]
+    fn fixed_duration_cuts_with_a_fade_and_pads_with_silence() {
+        let long = ExportOptions { duration: Some(0.05), normalize: false, ..Default::default() };
+        let s = prepare(&SoundPatch::default(), &long);
+        assert_eq!(s.len(), 2205);
+        assert!(s[s.len() - 1].abs() < 0.05, "the cut should fade out");
+        let padded = ExportOptions { duration: Some(30.0), ..Default::default() };
+        let s = prepare(&SoundPatch::default(), &padded);
+        assert_eq!(s.len(), 44_100 * 30);
+        assert_eq!(s[s.len() - 1], 0.0);
     }
 
     #[test]

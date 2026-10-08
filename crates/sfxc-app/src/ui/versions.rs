@@ -2,20 +2,14 @@ use eframe::egui::{self, Align, FontId, Id, Layout, Pos2, Rect, RichText, Stroke
 use egui_phosphor::regular as icon;
 
 use super::theme::{self, palette};
-use super::widgets::{self, age, badge, button, empty_state, icon_button, Kind, Tone};
+use super::widgets::{self, age, badge, empty_state, icon_button, Tone};
 use super::Action;
 use crate::store::VersionInfo;
 
 const GUTTER: f32 = 22.0;
 
-pub fn show(ui: &mut egui::Ui, versions: &[VersionInfo], current: Option<i64>, has_sound: bool, now: i64, actions: &mut Vec<Action>) {
-    widgets::panel_header(ui, "History", |ui| {
-        ui.add_enabled_ui(has_sound, |ui| {
-            if button(ui, Kind::Secondary, Some(icon::FLOPPY_DISK), "Save").on_hover_text("Save a version (⌘S)").clicked() {
-                actions.push(Action::AskVersionNote);
-            }
-        });
-    });
+pub fn show(ui: &mut egui::Ui, versions: &[VersionInfo], current: Option<i64>, has_sound: bool, now: i64, note_prompt: &mut Option<String>, actions: &mut Vec<Action>) {
+    widgets::panel_header(ui, "History", |_| {});
     ui.add_space(8.0);
     if !has_sound {
         ui.add_space(24.0);
@@ -26,7 +20,33 @@ pub fn show(ui: &mut egui::Ui, versions: &[VersionInfo], current: Option<i64>, h
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         let total = versions.len();
         entry(ui, true, total == 0, |ui| {
-            ui.label(RichText::new("Draft").font(FontId::new(13.5, theme::semibold())).color(palette(ui).text));
+            ui.horizontal(|ui| {
+                if let Some(note) = note_prompt.as_mut() {
+                    let r = ui.add(
+                        egui::TextEdit::singleline(note)
+                            .hint_text("Name this version")
+                            .font(FontId::new(13.5, theme::semibold()))
+                            .desired_width(f32::INFINITY),
+                    );
+                    if !r.has_focus() && !r.lost_focus() {
+                        r.request_focus();
+                    }
+                    if r.lost_focus() {
+                        if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                            actions.push(Action::CommitVersion(std::mem::take(note)));
+                        } else {
+                            *note_prompt = None;
+                        }
+                    }
+                } else {
+                    ui.label(RichText::new("Draft").font(FontId::new(13.5, theme::semibold())).color(palette(ui).text));
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if icon_button(ui, icon::FLOPPY_DISK, "Save a version (⌘S)").clicked() {
+                            actions.push(Action::AskVersionNote);
+                        }
+                    });
+                }
+            });
             ui.label(widgets::hint(ui, "Autosaved as you edit"));
         });
         for (i, v) in versions.iter().enumerate() {

@@ -3,7 +3,8 @@ use egui_phosphor::regular as icon;
 
 use super::accent;
 use super::theme::{palette, ThemeChoice, UI_SCALES};
-use super::widgets::{self, age, button, empty_state, icon_button, row_background, search_field, segmented, Kind};
+use super::widgets::{self, age, button, empty_state, icon_button, search_field, segmented, Kind};
+use super::theme::R_CONTROL;
 use super::Action;
 use crate::store::SoundSummary;
 
@@ -21,6 +22,8 @@ pub struct Prefs {
     pub volume: f32,
     /// Accent hue in degrees, 0..360.
     pub accent_hue: f32,
+    /// Play after every change.
+    pub autoplay: bool,
 }
 
 pub fn show(
@@ -32,11 +35,7 @@ pub fn show(
     prefs: &mut Prefs,
     actions: &mut Vec<Action>,
 ) {
-    widgets::panel_header(ui, "Library", |ui| {
-        if icon_button(ui, icon::PLUS, "New sound (⌘N)").clicked() {
-            actions.push(Action::NewSound);
-        }
-    });
+    widgets::panel_header(ui, "Library", |_| {});
     ui.add_space(4.0);
     if search_field(ui, search, "Search name or tag").changed() {
         actions.push(Action::RefreshList);
@@ -56,14 +55,11 @@ pub fn show(
         // Row shadows reach past the row; let them draw sideways inside the well.
         ui.set_clip_rect(ui.clip_rect().expand2(Vec2::new(8.0, 0.0)));
         ui.spacing_mut().item_spacing.y = 8.0;
+        new_row(ui, actions);
         if sounds.is_empty() {
             ui.add_space(24.0);
             if search.trim().is_empty() {
-                empty_state(ui, icon::WAVEFORM, "No sounds yet", "Generate your first effect and it appears here.", |ui| {
-                    if button(ui, Kind::Primary, Some(icon::PLUS), "New sound").clicked() {
-                        actions.push(Action::NewSound);
-                    }
-                });
+                empty_state(ui, icon::WAVEFORM, "No sounds yet", "Generate your first effect and it appears here.", |_| {});
             } else {
                 empty_state(ui, icon::MAGNIFYING_GLASS, "No matches", "Nothing matches this name or tag.", |ui| {
                     if button(ui, Kind::Secondary, None, "Clear search").clicked() {
@@ -81,11 +77,40 @@ pub fn show(
     });
 }
 
+/// Flat row fill: a faint tint fading in on hover, the accent tint when selected. No shadows.
+fn flat_row_background(ui: &egui::Ui, rect: egui::Rect, resp: &egui::Response, selected: bool) {
+    let p = palette(ui);
+    let hover = ui.ctx().animate_bool_with_time(resp.id.with("hover"), resp.hovered(), 0.12);
+    let fill = if selected { p.accent_soft.gamma_multiply(0.55) } else { p.hover.gamma_multiply(hover) };
+    ui.painter().rect_filled(rect, egui::CornerRadius::same(R_CONTROL), fill);
+}
+
+/// First row of the list: same footprint and hover as a sound row; the accent colored label marks it as an action.
+fn new_row(ui: &mut egui::Ui, actions: &mut Vec<Action>) {
+    let p = palette(ui);
+    let (rect, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), ROW_H), Sense::click());
+    let resp = resp.on_hover_cursor(CursorIcon::PointingHand).on_hover_text("New sound (⌘N)");
+    flat_row_background(ui, rect, &resp, false);
+    let painter = ui.painter_at(rect);
+    let color = p.accent_text;
+    let inner = rect.shrink2(Vec2::new(10.0, 7.0));
+    let plus = painter.layout_no_wrap(icon::PLUS.to_string(), FontId::proportional(15.0), color);
+    let label = painter.layout_no_wrap("New sound".to_string(), FontId::proportional(13.5), color);
+    let hint = painter.layout_no_wrap("⌘N".to_string(), FontId::proportional(11.0), p.faint);
+    let cy = rect.center().y;
+    painter.galley(Pos2::new(inner.left(), cy - plus.size().y / 2.0), plus.clone(), color);
+    painter.galley(Pos2::new(inner.left() + plus.size().x + 8.0, cy - label.size().y / 2.0), label, color);
+    painter.galley(Pos2::new(inner.right() - hint.size().x, cy - hint.size().y / 2.0), hint, p.faint);
+    if resp.clicked() {
+        actions.push(Action::NewSound);
+    }
+}
+
 fn row(ui: &mut egui::Ui, s: &SoundSummary, selected: bool, now: i64, actions: &mut Vec<Action>) {
     let p = palette(ui);
     let (rect, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), ROW_H), Sense::click());
     let resp = resp.on_hover_cursor(CursorIcon::PointingHand);
-    row_background(ui, rect, &resp, selected);
+    flat_row_background(ui, rect, &resp, selected);
     let inner = rect.shrink2(Vec2::new(10.0, 7.0));
     let editing: Option<(i64, String, bool)> = ui.data(|d| d.get_temp(rename_key()));
     if let Some((id, mut text, started)) = editing.filter(|(id, ..)| *id == s.id) {
@@ -116,9 +141,11 @@ fn row(ui: &mut egui::Ui, s: &SoundSummary, selected: bool, now: i64, actions: &
     let name = one_line(ui, &s.name, 13.5, name_color, inner.width() - when.size().x - 8.0);
     painter.galley(inner.left_top(), name, name_color);
     painter.galley(Pos2::new(inner.right() - when.size().x, inner.top() + 2.0), when, p.faint);
-    let tags = if s.tags.trim().is_empty() { "No tags" } else { s.tags.as_str() };
-    let sub = one_line(ui, tags, 11.5, p.faint, inner.width());
-    painter.galley(Pos2::new(inner.left(), inner.bottom() - sub.size().y), sub, p.faint);
+    let tags = super::editor::parse_tags(&s.tags).join(" · ");
+    if !tags.is_empty() {
+        let sub = one_line(ui, &tags, 11.5, p.faint, inner.width());
+        painter.galley(Pos2::new(inner.left(), inner.bottom() - sub.size().y), sub, p.faint);
+    }
 
     if resp.clicked() && !selected {
         actions.push(Action::Open(s.id));
@@ -152,7 +179,7 @@ const POPUP_W: f32 = 300.0;
 
 /// Flat "Settings" button with a popup for appearance and sound. Returns the button's rect.
 pub fn settings_button(ui: &mut egui::Ui, prefs: &mut Prefs, actions: &mut Vec<Action>) -> egui::Rect {
-    let resp = button(ui, Kind::Ghost, Some(icon::GEAR_SIX), "Settings");
+    let resp = icon_button(ui, icon::GEAR_SIX, "Settings");
     let frame = egui::Frame::popup(ui.style()).inner_margin(egui::Margin::same(22));
     egui::Popup::from_toggle_button_response(&resp)
         .align(egui::RectAlign::TOP_START)
@@ -208,16 +235,23 @@ pub fn settings_button(ui: &mut egui::Ui, prefs: &mut Prefs, actions: &mut Vec<A
 
             heading(ui, "Sound");
             ui.add_space(6.0);
+            let mut autoplay = prefs.autoplay;
+            if widgets::toggle(ui, &mut autoplay, "Auto-play").on_hover_text("Play after every change").changed() {
+                actions.push(Action::SetAutoplay(autoplay));
+            }
+            // The slider position is what the user sees: the label and the handle both show it as a percentage.
+            let mut pct = crate::audio::slider_from_volume(prefs.volume) * 100.0;
             ui.horizontal(|ui| {
                 ui.label(widgets::hint(ui, "Volume"));
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.label(widgets::hint(ui, format!("{:.0}%", prefs.volume * 100.0)));
+                    ui.label(widgets::hint(ui, format!("{pct:.0}%")));
                 });
             });
-            let mut pos = crate::audio::slider_from_volume(prefs.volume);
-            let default = crate::audio::slider_from_volume(crate::audio::DEFAULT_VOLUME);
-            let r = super::controls::track(ui, &mut pos, 0.0, 1.0, default, false, POPUP_W);
-            prefs.volume = crate::audio::volume_from_slider(pos);
+            let default = crate::audio::slider_from_volume(crate::audio::DEFAULT_VOLUME) * 100.0;
+            let r = super::controls::track_quiet(ui, &mut pct, 0.0, 100.0, default, false, POPUP_W);
+            if r.changed() {
+                prefs.volume = crate::audio::volume_from_slider(pct / 100.0);
+            }
             if r.drag_stopped() || (r.changed() && !r.dragged()) {
                 actions.push(Action::SaveVolume);
             }

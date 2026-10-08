@@ -1,25 +1,28 @@
-//! Master effects chain: a horizontal strip of cards. Each card has a drag handle, folds up by its
-//! title like the sound-settings cards, and shows its parameters as knobs.
+//! Master effects chain: a horizontal strip of tall cards in signal order. Every card has a fixed rail on its
+//! left (handle, fold caret, the name reading upward, bypass, remove); open, the knobs sit to the right of it.
+//! Folding only hides the knobs: the rail never moves, so the card just narrows to it.
 
-use eframe::egui::{self, vec2, Align, Align2, CursorIcon, FontId, Id, Layout, Pos2, Rect, RichText, Sense};
+use eframe::egui::{self, vec2, Align, Align2, CursorIcon, FontId, Id, Layout, Pos2, Rect, Sense};
 use egui_phosphor::regular as icon;
 use sfxc_core::patch::{ranges::*, DistortionKind, Effect, EffectKind};
 
-use super::material::{self, Motion};
+use super::material;
 use super::order;
-use super::theme::{self, palette, Palette, R_CARD};
-use super::widgets::{drop_zone, grip_handle, icon_button, knob, knob_num, section, segmented, toggle, Axis, Grip};
+use super::theme::{self, palette, R_CARD};
+use super::widgets::{drop_zone, grip_handle, icon_button, knob, knob_num, power_toggle, section, segmented, Axis, Grip};
 
-const CARD_W: f32 = 212.0;
+const CARD_W: f32 = 224.0;
 const CARD_H: f32 = 300.0;
 const GAP: f32 = 12.0;
-const HEAD_H: f32 = 36.0;
+/// Width of the rail, and of a folded card.
+const RAIL_W: f32 = 44.0;
 const PICK_ROW: f32 = 30.0;
+/// Seconds the card takes to widen or narrow.
+const FOLD_TIME: f32 = 0.12;
 
 pub enum Op {
     Move(usize, usize),
     Remove(usize),
-    Duplicate(usize),
     Add(EffectKind),
 }
 
@@ -30,13 +33,8 @@ pub fn apply(effects: &mut Vec<Effect>, op: Op, next_id: u64) {
         Op::Remove(i) if i < effects.len() => {
             effects.remove(i);
         }
-        Op::Duplicate(i) if i < effects.len() => {
-            let mut copy = effects[i].clone();
-            copy.id = next_id;
-            effects.insert(i + 1, copy);
-        }
         Op::Add(kind) => effects.push(Effect { id: next_id, enabled: true, kind }),
-        Op::Remove(_) | Op::Duplicate(_) => {}
+        Op::Remove(_) => {}
     }
 }
 
@@ -70,114 +68,82 @@ fn card(ui: &mut egui::Ui, effect: &mut Effect, i: usize, op: &mut Option<Op>) -
     let p = palette(ui);
     let open_id = Id::new(("fx_open", effect.id));
     let mut open = ui.data(|d| d.get_temp::<bool>(open_id)).unwrap_or(true);
-    let t = ui.ctx().animate_bool_with_time(open_id.with("t"), open, 0.15);
-    let (rect, _) = ui.allocate_exact_size(vec2(CARD_W, egui::lerp(HEAD_H..=CARD_H, t)), Sense::hover());
-    let head_rect = Rect::from_min_size(rect.min, vec2(CARD_W, HEAD_H));
-    let radius = R_CARD as f32;
-
-    // Sunken cell inside the Effects card; a bypassed one is flatter.
-    material::recessed(ui.painter(), rect, radius, &p, if effect.enabled { 0.5 } else { 0.15 });
-
-    // Left of the header: drag handle, caret and title (clicking either folds the card).
-    let mut left = ui.new_child(egui::UiBuilder::new().max_rect(head_rect.shrink2(vec2(10.0, 0.0))).layout(Layout::left_to_right(Align::Center)));
-    left.spacing_mut().item_spacing.x = 4.0;
-    grip_handle(&mut left, Grip { group: "effects", index: i }, &effect.id.to_string());
-    let caret = if open { icon::CARET_DOWN } else { icon::CARET_RIGHT };
+    let t = ui.ctx().animate_bool_with_time_and_easing(open_id.with("t"), open, FOLD_TIME, egui::emath::easing::cubic_out);
+    let (rect, _) = ui.allocate_exact_size(vec2(egui::lerp(RAIL_W..=CARD_W, t), CARD_H), Sense::hover());
+    let grip = Grip { group: "effects", index: i };
     let title_color = if effect.enabled { p.text } else { p.faint };
-    let title = egui::Label::new(RichText::new(format!("{caret} {}", effect.kind.name())).font(FontId::new(13.5, theme::semibold())).color(title_color));
-    if left.add(title.sense(Sense::click())).on_hover_cursor(CursorIcon::PointingHand).clicked() {
+
+    // Sunken cell; a bypassed one is nearly flat.
+    material::recessed(ui.painter(), rect, R_CARD as f32, &p, if effect.enabled { 0.5 } else { 0.12 });
+
+    // Rail: the same in both states.
+    let rail = Rect::from_min_size(rect.min, vec2(RAIL_W, CARD_H));
+    let mut top = ui.new_child(egui::UiBuilder::new().max_rect(rail.shrink2(vec2(4.0, 6.0))).layout(Layout::top_down(Align::Center)));
+    top.spacing_mut().item_spacing.y = 4.0;
+    grip_handle(&mut top, grip, &effect.id.to_string());
+    let (caret, caret_tip) = if open { (icon::CARET_LEFT, "Fold") } else { (icon::CARET_RIGHT, "Unfold") };
+    if icon_button(&mut top, caret, caret_tip).clicked() {
         open = !open;
     }
+    let mut foot = ui.new_child(egui::UiBuilder::new().max_rect(rail.shrink2(vec2(4.0, 6.0))).layout(Layout::bottom_up(Align::Center)));
+    foot.spacing_mut().item_spacing.y = 6.0;
+    if icon_button(&mut foot, icon::TRASH, "Remove").clicked() {
+        *op = Some(Op::Remove(i));
+    }
+    power_toggle(&mut foot, &mut effect.enabled).on_hover_text(if effect.enabled { "Bypass" } else { "Enable" });
 
-    // Right of the header: bypass switch and the overflow menu.
-    let mut right = ui.new_child(egui::UiBuilder::new().max_rect(head_rect.shrink2(vec2(8.0, 0.0))).layout(Layout::right_to_left(Align::Center)));
-    right.spacing_mut().item_spacing.x = 2.0;
-    let more = icon_button(&mut right, icon::DOTS_THREE, "More");
-    egui::Popup::menu(&more).show(|ui| {
-        if ui.button(format!("{}  Duplicate", icon::COPY)).clicked() {
-            *op = Some(Op::Duplicate(i));
-        }
-        if ui.button(RichText::new(format!("{}  Remove", icon::TRASH)).color(p.danger)).clicked() {
-            *op = Some(Op::Remove(i));
-        }
-    });
-    toggle(&mut right, &mut effect.enabled, "").on_hover_text(if effect.enabled { "Bypass" } else { "Enable" });
+    // Name between the buttons, hanging from the top and reading upward; clicking it folds or unfolds.
+    let galley = ui.painter().layout_no_wrap(effect.kind.name().to_owned(), FontId::new(13.5, theme::semibold()), title_color);
+    let zone = Rect::from_min_max(Pos2::new(rail.left(), rail.top() + 76.0), Pos2::new(rail.right(), rail.bottom() - 80.0));
+    if ui.interact(zone, open_id.with("title"), Sense::click()).on_hover_cursor(CursorIcon::PointingHand).on_hover_text(caret_tip).clicked() {
+        open = !open;
+    }
+    let pos = Pos2::new(rail.center().x - galley.size().y / 2.0, zone.top() + galley.size().x);
+    ui.painter().add(egui::epaint::TextShape::new(pos, galley, title_color).with_angle(-std::f32::consts::FRAC_PI_2));
 
-    if t > 0.02 {
-        let body = Rect::from_min_max(rect.min + vec2(10.0, HEAD_H), Pos2::new(rect.right() - 10.0, rect.min.y + CARD_H - 10.0));
+    // Knobs right of the rail, laid out at full width and uncovered as the card widens.
+    if t > 0.0 {
+        let body = Rect::from_min_size(Pos2::new(rail.right() + 2.0, rect.top() + 12.0), vec2(CARD_W - RAIL_W - 12.0, CARD_H - 24.0));
         let mut body_ui = ui.new_child(egui::UiBuilder::new().max_rect(body).layout(Layout::left_to_right(Align::TOP).with_main_wrap(true)));
-        body_ui.set_clip_rect(rect.intersect(body_ui.clip_rect()));
-        body_ui.set_opacity(t);
+        body_ui.set_clip_rect(rect.shrink(2.0).intersect(body_ui.clip_rect()));
         body_ui.spacing_mut().item_spacing = vec2(8.0, 6.0);
-        body_ui.add_enabled_ui(effect.enabled, |ui| params(ui, &mut effect.kind));
+        body_ui.add_enabled_ui(effect.enabled && open, |ui| params(ui, &mut effect.kind));
     }
     ui.data_mut(|d| d.insert_temp(open_id, open));
 
-    let zone = Rect::from_min_size(rect.min, vec2(CARD_W, CARD_H));
-    drop_zone(ui, zone, Grip { group: "effects", index: i }, Axis::Horizontal, GAP / 2.0 + ui.spacing().item_spacing.x / 2.0)
+    drop_zone(ui, rect, grip, Axis::Horizontal, GAP / 2.0 + ui.spacing().item_spacing.x / 2.0)
 }
 
-/// The trailing "+" card. Clicking it turns the card into the list of effects; picking one, Esc,
-/// the close button or a click elsewhere turns it back.
+/// The trailing slot: a sunken well like the effect cards, with a quiet "+". Clicking turns it into
+/// the list of effects; picking one, Esc or a click elsewhere turns it back.
 fn add_card(ui: &mut egui::Ui, rect: Rect, op: &mut Option<Op>) {
     let p = palette(ui);
     let open_id = Id::new("fx_add_open");
     let mut open = ui.data(|d| d.get_temp::<bool>(open_id)).unwrap_or(false);
-    let t = ui.ctx().animate_bool_with_time(open_id.with("t"), open, 0.18);
     let radius = R_CARD as f32;
 
-    // Closed look fades out as the list fades in.
-    // Closed: just an outline, so it reads as an empty slot rather than another effect.
-    if t > 0.01 {
-        material::recessed(ui.painter(), rect, radius, &p, 0.5 * t);
-    }
-    ui.painter().rect_stroke(rect, radius, egui::Stroke::new(1.0, p.faint.gamma_multiply(0.45 * (1.0 - t))), egui::StrokeKind::Inside);
-    if t < 0.99 {
-        let closed_alpha = 1.0 - t;
-        if !open {
-            let resp = ui.interact(rect, Id::new("fx_add"), Sense::click()).on_hover_cursor(CursorIcon::PointingHand).on_hover_text("Add effect");
-            let m = Motion::of(ui, &resp);
-            material::accent_edge(ui.painter(), rect, radius, &p, m.hover * closed_alpha);
-            if resp.clicked() {
-                open = true;
-            }
-            let c = if m.hover > 0.5 { p.accent_text } else { p.muted };
-            ui.painter().text(rect.center(), Align2::CENTER_CENTER, icon::PLUS, FontId::proportional(28.0), c.gamma_multiply(closed_alpha));
-        } else {
-            ui.painter().text(rect.center(), Align2::CENTER_CENTER, icon::PLUS, FontId::proportional(28.0), p.muted.gamma_multiply(closed_alpha));
+    material::recessed(ui.painter(), rect, radius, &p, 0.5);
+    if !open {
+        let resp = ui.interact(rect, Id::new("fx_add"), Sense::click()).on_hover_cursor(CursorIcon::PointingHand).on_hover_text("Add effect");
+        if resp.clicked() {
+            open = true;
         }
-    }
-    if t > 0.01 {
-        let mut painter = ui.painter().clone();
-        painter.set_opacity(t);
-        material::raised(&painter, rect, radius, &Palette { raised: p.surface, ..p }, &Motion::REST);
-        let head_rect = Rect::from_min_size(rect.min, vec2(CARD_W, HEAD_H));
-        painter.text(head_rect.left_center() + vec2(12.0, 0.0), Align2::LEFT_CENTER, "Add effect", FontId::new(13.5, theme::semibold()), p.text);
-        let mut head = ui.new_child(egui::UiBuilder::new().max_rect(head_rect.shrink2(vec2(8.0, 4.0))).layout(Layout::right_to_left(Align::Center)));
-        head.set_opacity(t);
-        if open && icon_button(&mut head, icon::X, "Close").clicked() {
-            open = false;
-        }
+        let c = if resp.hovered() { p.accent_text } else { p.faint };
+        ui.painter().text(rect.center(), Align2::CENTER_CENTER, icon::PLUS, FontId::proportional(26.0), c);
+    } else {
         for (i, kind) in EffectKind::all_defaults().into_iter().enumerate() {
-            let row = Rect::from_min_size(
-                Pos2::new(rect.left() + 10.0, rect.top() + HEAD_H + i as f32 * (PICK_ROW + 2.0)),
-                vec2(CARD_W - 20.0, PICK_ROW),
-            );
-            let resp = ui.interact(row, Id::new(("fx_pick", i)), if open { Sense::click() } else { Sense::hover() });
-            if open {
-                resp.clone().on_hover_cursor(CursorIcon::PointingHand);
+            let row = Rect::from_min_size(Pos2::new(rect.left() + 8.0, rect.top() + 8.0 + i as f32 * (PICK_ROW + 2.0)), vec2(CARD_W - 16.0, PICK_ROW));
+            let resp = ui.interact(row, Id::new(("fx_pick", i)), Sense::click()).on_hover_cursor(CursorIcon::PointingHand);
+            if resp.hovered() {
+                ui.painter().rect_filled(row, theme::R_CONTROL, p.hover);
             }
-            let mut row_ui = ui.new_child(egui::UiBuilder::new().max_rect(row));
-            row_ui.set_opacity(t);
-            super::widgets::row_background(&row_ui, row, &resp, false);
-            row_ui.painter().text(row.left_center() + vec2(10.0, 0.0), Align2::LEFT_CENTER, kind.name(), FontId::proportional(13.0), p.text);
-            if open && resp.clicked() {
+            let c = if resp.hovered() { p.text } else { p.muted };
+            ui.painter().text(row.left_center() + vec2(10.0, 0.0), Align2::LEFT_CENTER, kind.name(), FontId::proportional(13.0), c);
+            if resp.clicked() {
                 *op = Some(Op::Add(kind));
                 open = false;
             }
         }
-    }
-    if open {
         let outside = ui.input(|i| i.pointer.any_pressed()) && !ui.ctx().pointer_interact_pos().is_some_and(|pt| rect.contains(pt));
         if outside || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             open = false;
@@ -282,15 +248,7 @@ mod tests {
         apply(&mut e, Op::Remove(1), 99);
         assert_eq!(ids(&e), vec![1, 3]);
         apply(&mut e, Op::Remove(7), 99);
-        apply(&mut e, Op::Duplicate(7), 99);
         assert_eq!(ids(&e), vec![1, 3]);
-    }
-
-    #[test]
-    fn duplicate_goes_right_after_the_original_with_a_fresh_id() {
-        let mut e = chain(3);
-        apply(&mut e, Op::Duplicate(0), 10);
-        assert_eq!(ids(&e), vec![1, 10, 2, 3]);
     }
 
     #[test]
