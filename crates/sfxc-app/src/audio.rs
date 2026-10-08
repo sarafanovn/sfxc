@@ -112,12 +112,6 @@ impl Player {
         }
     }
 
-    pub fn stop(&self) {
-        if let Ok(mut g) = self.state.lock() {
-            *g = None;
-        }
-    }
-
     /// Call once per UI frame.
     pub fn maintain(&mut self) {
         if self.failed.swap(false, Ordering::SeqCst) {

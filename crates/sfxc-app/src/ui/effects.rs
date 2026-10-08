@@ -64,11 +64,12 @@ pub fn show(ui: &mut egui::Ui, effects: &mut Vec<Effect>, next_id: u64) {
         let mut copy = effects[i].clone();
         copy.id = next_id;
         effects.insert(i + 1, copy);
-    } else if let Some((from, to)) = moved {
-        if from != to && from < effects.len() {
-            let item = effects.remove(from);
-            effects.insert(to.min(effects.len()), item);
-        }
+    } else if let Some((from, to)) = moved
+        && from != to
+        && from < effects.len()
+    {
+        let item = effects.remove(from);
+        effects.insert(to.min(effects.len()), item);
     }
 }
 

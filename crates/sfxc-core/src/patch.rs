@@ -621,8 +621,7 @@ mod tests {
 
     #[test]
     fn clamp_fixes_out_of_range_and_nan() {
-        let mut p = SoundPatch::default();
-        p.master_volume = f32::NAN;
+        let mut p = SoundPatch { master_volume: f32::NAN, ..Default::default() };
         p.layers[0].pitch.base_freq = 1e9;
         p.layers[0].env.release = -3.0;
         p.layers[0].pitch.arp_steps = vec![100; 20];

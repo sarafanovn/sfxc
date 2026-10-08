@@ -449,12 +449,12 @@ impl SfxcApp {
         if ctx.input(|i| i.pointer.any_down()) {
             return;
         }
-        if let Some(base) = self.edit_base.take() {
-            if self.current.as_ref().is_some_and(|c| c.patch != base) {
-                self.history.push(base);
-                if self.autoplay {
-                    self.play();
-                }
+        if let Some(base) = self.edit_base.take()
+            && self.current.as_ref().is_some_and(|c| c.patch != base)
+        {
+            self.history.push(base);
+            if self.autoplay {
+                self.play();
             }
         }
     }

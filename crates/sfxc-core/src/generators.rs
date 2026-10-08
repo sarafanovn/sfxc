@@ -85,8 +85,10 @@ fn noise(rng: &mut Rng, mode: Mode) -> Source {
 pub fn generate(category: Category, mode: Mode, seed: u64) -> SoundPatch {
     let mut rng = Rng::new(seed);
     let r = &mut rng;
-    let mut l = Layer::default();
-    l.env = Envelope { attack: 0.0, decay: 0.0, sustain_level: 1.0, sustain_time: 0.1, release: 0.2, punch: 0.0 };
+    let mut l = Layer {
+        env: Envelope { attack: 0.0, decay: 0.0, sustain_level: 1.0, sustain_time: 0.1, release: 0.2, punch: 0.0 },
+        ..Default::default()
+    };
     match category {
         Category::PickupCoin => {
             l.source = tonal(r, mode, &[PULSE, TRIANGLE, SINE]);
