@@ -9,7 +9,6 @@ use std::path::PathBuf;
 use directories::ProjectDirs;
 use eframe::egui;
 
-/// `~/Library/Application Support/sfxc/library.db` on macOS; `SFXC_LIBRARY` overrides it.
 fn library_path() -> PathBuf {
     if let Some(path) = std::env::var_os("SFXC_LIBRARY") {
         return PathBuf::from(path);

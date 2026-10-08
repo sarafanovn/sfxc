@@ -1,5 +1,3 @@
-//! In-memory undo/redo for the open sound. Independent of saved versions.
-
 use std::collections::VecDeque;
 
 use sfxc_core::patch::SoundPatch;

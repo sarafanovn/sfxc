@@ -10,7 +10,6 @@ use crate::store::SoundSummary;
 
 const ROW_H: f32 = 46.0;
 
-/// egui temp key holding `(sound id, edited text, just started)` while a row is renamed.
 fn rename_key() -> Id {
     Id::new("library_rename")
 }
@@ -18,11 +17,8 @@ fn rename_key() -> Id {
 pub struct Prefs {
     pub theme: ThemeChoice,
     pub scale: f32,
-    /// Playback amplitude, 0..=1. Not part of any sound.
     pub volume: f32,
-    /// Accent hue in degrees, 0..360.
     pub accent_hue: f32,
-    /// Play after every change.
     pub autoplay: bool,
 }
 
@@ -43,7 +39,6 @@ pub fn show(
     ui.add_space(8.0);
 
     egui::Panel::bottom("library_footer").frame(egui::Frame::NONE).show_separator_line(false).show(ui, |ui| {
-        // The footer is its own panel and clips to its content rect; the button's shadow needs the panel margin.
         ui.set_clip_rect(ui.clip_rect().expand(14.0));
         ui.add_space(6.0);
         settings_button(ui, prefs, actions);
@@ -52,7 +47,6 @@ pub fn show(
 
     widgets::list_well(ui, |ui| {
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-        // Row shadows reach past the row; let them draw sideways inside the well.
         ui.set_clip_rect(ui.clip_rect().expand2(Vec2::new(8.0, 0.0)));
         ui.spacing_mut().item_spacing.y = 8.0;
         new_row(ui, actions);
@@ -77,7 +71,6 @@ pub fn show(
     });
 }
 
-/// Flat row fill: a faint tint fading in on hover, the accent tint when selected. No shadows.
 fn flat_row_background(ui: &egui::Ui, rect: egui::Rect, resp: &egui::Response, selected: bool) {
     let p = palette(ui);
     let hover = ui.ctx().animate_bool_with_time(resp.id.with("hover"), resp.hovered(), 0.12);
@@ -85,7 +78,6 @@ fn flat_row_background(ui: &egui::Ui, rect: egui::Rect, resp: &egui::Response, s
     ui.painter().rect_filled(rect, egui::CornerRadius::same(R_CONTROL), fill);
 }
 
-/// First row of the list: same footprint and hover as a sound row; the accent colored label marks it as an action.
 fn new_row(ui: &mut egui::Ui, actions: &mut Vec<Action>) {
     let p = palette(ui);
     let (rect, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), ROW_H), Sense::click());
@@ -167,17 +159,14 @@ fn row(ui: &mut egui::Ui, s: &SoundSummary, selected: bool, now: i64, actions: &
     resp.context_menu(menu);
 }
 
-/// Lays out one line cut to `width` with an ellipsis.
 fn one_line(ui: &egui::Ui, text: &str, size: f32, color: egui::Color32, width: f32) -> std::sync::Arc<egui::Galley> {
     let mut job = egui::text::LayoutJob::simple_singleline(text.to_string(), FontId::proportional(size), color);
     job.wrap = egui::text::TextWrapping::truncate_at_width(width.max(10.0));
     ui.painter().layout_job(job)
 }
 
-/// Content width of the Settings popup, inside its padding.
 const POPUP_W: f32 = 300.0;
 
-/// Flat "Settings" button with a popup for appearance and sound. Returns the button's rect.
 pub fn settings_button(ui: &mut egui::Ui, prefs: &mut Prefs, actions: &mut Vec<Action>) -> egui::Rect {
     let resp = icon_button(ui, icon::GEAR_SIX, "Settings");
     let frame = egui::Frame::popup(ui.style()).inner_margin(egui::Margin::same(22));
@@ -239,7 +228,6 @@ pub fn settings_button(ui: &mut egui::Ui, prefs: &mut Prefs, actions: &mut Vec<A
             if widgets::toggle(ui, &mut autoplay, "Auto-play").on_hover_text("Play after every change").changed() {
                 actions.push(Action::SetAutoplay(autoplay));
             }
-            // The slider position is what the user sees: the label and the handle both show it as a percentage.
             let mut pct = crate::audio::slider_from_volume(prefs.volume) * 100.0;
             ui.horizontal(|ui| {
                 ui.label(widgets::hint(ui, "Volume"));

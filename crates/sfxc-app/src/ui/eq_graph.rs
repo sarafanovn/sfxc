@@ -1,5 +1,3 @@
-//! Graphic-equalizer widget: one draggable point per band on a smooth curve, over a ±12 dB grid.
-
 use eframe::egui::{self, vec2, Align2, Color32, CursorIcon, FontId, Id, Mesh, Pos2, Rect, Response, Sense, Shape, Stroke, Ui, Vec2};
 use sfxc_core::eq::{Equalizer, BANDS, RANGE_DB};
 
@@ -8,33 +6,26 @@ use super::theme::{palette, R_CONTROL};
 
 pub const FREQ_LABELS: [&str; BANDS] = ["60 Hz", "150 Hz", "400 Hz", "1 kHz", "2.4 kHz", "15 kHz"];
 
-/// Space left of the plot for the "+12 dB / -12 dB" labels, and below it for the frequencies.
 const LEFT: f32 = 62.0;
 const BOTTOM: f32 = 30.0;
 const TOP: f32 = 18.0;
 pub const HEIGHT: f32 = 230.0;
 
-/// y position of `gain` dB: +12 at `top`, -12 at `bottom`.
 pub fn gain_to_y(gain: f32, top: f32, bottom: f32) -> f32 {
     top + (RANGE_DB - gain.clamp(-RANGE_DB, RANGE_DB)) / (2.0 * RANGE_DB) * (bottom - top)
 }
 
-/// Gain under pointer height `y`, clamped to the range and snapped to half a decibel.
 pub fn y_to_gain(y: f32, top: f32, bottom: f32) -> f32 {
     let g = RANGE_DB - (y - top) / (bottom - top) * 2.0 * RANGE_DB;
     ((g * 2.0).round() / 2.0).clamp(-RANGE_DB, RANGE_DB)
 }
 
-/// x of band `i`: the bands sit in the middle of equal columns of the plot.
 pub fn band_x(i: usize, left: f32, right: f32) -> f32 {
     left + (i as f32 + 0.5) / BANDS as f32 * (right - left)
 }
 
-/// Smooth curve through the band gains (monotone cubic, so it never overshoots a point).
-/// Returns `(band position 0..=5, gain)` with `per_segment` steps between neighbouring bands.
 pub fn smooth_curve(gains: &[f32; BANDS], per_segment: usize) -> Vec<(f32, f32)> {
     let n = BANDS;
-    // Fritsch–Carlson tangents.
     let delta: Vec<f32> = (0..n - 1).map(|i| gains[i + 1] - gains[i]).collect();
     let mut m = vec![0.0f32; n];
     m[0] = delta[0];
@@ -71,8 +62,6 @@ pub fn smooth_curve(gains: &[f32; BANDS], per_segment: usize) -> Vec<(f32, f32)>
     out
 }
 
-/// The equalizer graph. Dragging inside a band's column sets its gain, double click resets it to 0.
-/// The response is marked changed when a gain moved.
 pub fn show(ui: &mut Ui, eq: &mut Equalizer) -> Response {
     let p = palette(ui);
     let (rect, mut all) = ui.allocate_exact_size(vec2(ui.available_width(), HEIGHT), egui::Sense::hover());
@@ -82,7 +71,6 @@ pub fn show(ui: &mut Ui, eq: &mut Equalizer) -> Response {
     let accent = if enabled { p.accent } else { p.faint };
     let column_w = plot.width() / BANDS as f32;
 
-    // Interaction first, so the drawing below shows the value after the drag.
     for i in 0..BANDS {
         let x = band_x(i, plot.left(), plot.right());
         let col = Rect::from_min_max(Pos2::new(x - column_w / 2.0, plot.top() - 8.0), Pos2::new(x + column_w / 2.0, plot.bottom() + 8.0));
@@ -102,7 +90,6 @@ pub fn show(ui: &mut Ui, eq: &mut Equalizer) -> Response {
     }
 
     let painter = ui.painter();
-    // Grid: a line through every band and the zero line.
     let grid = Stroke::new(1.0, p.faint.gamma_multiply(0.25));
     for i in 0..BANDS {
         let x = band_x(i, plot.left(), plot.right());
@@ -116,7 +103,6 @@ pub fn show(ui: &mut Ui, eq: &mut Equalizer) -> Response {
         painter.text(Pos2::new(band_x(i, plot.left(), plot.right()), rect.bottom() - 14.0), Align2::CENTER_CENTER, *label, axis.clone(), p.muted);
     }
 
-    // The curve, with a fade under it.
     let to_screen = |(t, g): (f32, f32)| {
         let x = band_x(0, plot.left(), plot.right()) + t * column_w;
         Pos2::new(x, gain_to_y(g, plot.top(), plot.bottom()))
@@ -138,7 +124,6 @@ pub fn show(ui: &mut Ui, eq: &mut Equalizer) -> Response {
     }
     painter.add(Shape::line(pts, Stroke::new(3.0, accent)));
 
-    // Points and, while a band is hovered or dragged, its value.
     for i in 0..BANDS {
         let c = Pos2::new(band_x(i, plot.left(), plot.right()), gain_to_y(eq.gains[i], plot.top(), plot.bottom()));
         let col = Rect::from_center_size(c, vec2(column_w, plot.height() + 16.0));
@@ -178,7 +163,6 @@ mod tests {
         for (_, y) in smooth_curve(&gains, 16) {
             assert!((-12.0..=12.0).contains(&y), "{y}");
         }
-        // Flat stays flat, a monotone ramp stays monotone.
         assert!(smooth_curve(&[0.0; 6], 4).iter().all(|(_, y)| y.abs() < 1e-6));
         let ramp = smooth_curve(&[-6.0, -3.0, 0.0, 3.0, 6.0, 12.0], 8);
         assert!(ramp.windows(2).all(|w| w[1].1 >= w[0].1 - 1e-5));

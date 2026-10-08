@@ -1,12 +1,9 @@
-//! Soft-relief drawing and the animated interaction state shared by custom widgets.
-
 use eframe::egui::{
     emath::easing, vec2, Color32, Mesh, Painter, Pos2, Rect, Response, Shadow, Stroke, StrokeKind, Ui,
 };
 
 use super::theme::{self, Palette};
 
-/// Animated 0..1 interaction values. `press` can briefly go below 0 on release (spring).
 #[derive(Clone, Copy, Debug)]
 pub struct Motion {
     pub hover: f32,
@@ -29,7 +26,6 @@ impl Motion {
     }
 }
 
-/// Points of a rounded rectangle outline, clockwise from the bottom-right corner.
 fn rounded_outline(rect: Rect, r: f32, seg: usize) -> Vec<Pos2> {
     let r = r.min(rect.width() / 2.0).min(rect.height() / 2.0).max(0.0);
     let corners = [
@@ -48,7 +44,6 @@ fn rounded_outline(rect: Rect, r: f32, seg: usize) -> Vec<Pos2> {
     pts
 }
 
-/// Fill with a 4% top-to-bottom gradient.
 pub fn surface(painter: &Painter, rect: Rect, radius: f32, base: Color32) {
     painter.rect_filled(rect, radius, base);
     let top = base.lerp_to_gamma(Color32::WHITE, 0.04);
@@ -67,7 +62,6 @@ pub fn surface(painter: &Painter, rect: Rect, radius: f32, base: Color32) {
     painter.add(mesh);
 }
 
-/// Inner shadow: dark along the top-left inside edge, light along the bottom-right.
 pub fn inset(painter: &Painter, rect: Rect, radius: f32, p: &Palette, depth: f32) {
     if depth <= 0.0 {
         return;
@@ -82,7 +76,6 @@ pub fn inset(painter: &Painter, rect: Rect, radius: f32, p: &Palette, depth: f32
     }
 }
 
-/// Thin accent line just inside the edge; `t` is its strength (hover or focus). Nothing is drawn outside the element.
 pub fn accent_edge(painter: &Painter, rect: Rect, radius: f32, p: &Palette, t: f32) {
     if t <= 0.01 {
         return;
@@ -90,11 +83,9 @@ pub fn accent_edge(painter: &Painter, rect: Rect, radius: f32, p: &Palette, t: f
     painter.rect_stroke(rect, radius, Stroke::new(1.5, p.accent.gamma_multiply(0.75 * t)), StrokeKind::Inside);
 }
 
-/// Raised surface that bulges on hover, sinks on press and springs back on release.
 pub fn raised(painter: &Painter, rect: Rect, radius: f32, p: &Palette, m: &Motion) {
     let e = (0.6 + 0.4 * m.hover) * (1.0 - m.press);
     if e > 0.0 {
-        // Small controls get small shadows, so they stay inside the gap around them.
         let k = (rect.size().min_elem() / 44.0).clamp(0.45, 1.0);
         let d = ((4.0 * e * k).round() as i8).max(1);
         let blur = ((8.0 + 10.0 * e) * k) as u8;
@@ -106,7 +97,6 @@ pub fn raised(painter: &Painter, rect: Rect, radius: f32, p: &Palette, m: &Motio
     accent_edge(painter, rect, radius, p, m.hover.max(m.focus));
 }
 
-/// Sunken well (tracks, slots, bypassed cards). `depth` 0..1.
 pub fn recessed(painter: &Painter, rect: Rect, radius: f32, p: &Palette, depth: f32) {
     painter.rect_filled(rect, radius, p.well);
     inset(painter, rect, radius, p, depth);

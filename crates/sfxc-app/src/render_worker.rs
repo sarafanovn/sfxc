@@ -1,5 +1,3 @@
-//! Background rendering. Requests are coalesced: only the newest pending job is rendered.
-
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
@@ -11,22 +9,17 @@ use sfxc_core::render::render_cancellable;
 pub struct RenderJob {
     pub generation: u64,
     pub patch: SoundPatch,
-    /// Rate the sound is rendered at: the one chosen for the sound, so the preview sounds like the export.
     pub sample_rate: u32,
-    /// Rate of the output device; the render is resampled to it.
     pub play_rate: u32,
 }
 
 pub struct RenderResult {
     pub generation: u64,
-    /// Rate of `samples` (the device rate).
     pub sample_rate: u32,
-    /// Rate the sound was rendered at before resampling.
     pub render_rate: u32,
     pub samples: Arc<Vec<f32>>,
 }
 
-/// Linear-interpolation resampling. Good enough for previewing: the band limit of the rendered rate survives.
 pub fn resample(samples: Vec<f32>, from: u32, to: u32) -> Vec<f32> {
     if from == to || samples.is_empty() {
         return samples;

@@ -1,18 +1,14 @@
-//! Pitch over time: base frequency, slide, vibrato, arpeggio, NES quantization.
-
 use std::f32::consts::TAU;
 
 use crate::patch::{Mode, Pitch};
 
 pub const NES_CPU_HZ: f32 = 1_789_773.0;
 
-/// Snaps to the nearest frequency the NES pulse channel can play (11-bit period register).
 pub fn nes_quantize(freq: f32) -> f32 {
     let period = (NES_CPU_HZ / (16.0 * freq) - 1.0).round().clamp(0.0, 2047.0);
     NES_CPU_HZ / (16.0 * (period + 1.0))
 }
 
-/// The frequency when nothing modulates the pitch; equal to `freq_at` for every `t`.
 pub fn constant_freq(p: &Pitch, mode: Mode, sample_rate: f32) -> Option<f32> {
     let arp = p.arp_enabled && !p.arp_steps.is_empty();
     (p.slide == 0.0 && p.delta_slide == 0.0 && p.vibrato_depth <= 0.0 && !arp).then(|| freq_at(p, mode, 0.0, sample_rate))

@@ -1,5 +1,3 @@
-//! Arpeggio step editing: pure helpers and the step-bar widget.
-
 use sfxc_core::patch::MAX_ARP_STEPS;
 
 use eframe::egui::{self, vec2, Align2, CursorIcon, FontId, Pos2, Rect, Response, Sense, Stroke, Ui};
@@ -12,8 +10,6 @@ pub const PRESETS: [(&str, &[i8]); 4] =
 
 const RANGE: i8 = 24;
 
-/// Appends a step that changes the pitch: `[0, 12]` on an empty arp, else the last step + 4
-/// (or − 4 when + 4 would hit the top and repeat it).
 pub fn add_step(steps: &mut Vec<i8>) {
     if steps.is_empty() {
         steps.extend([0, 12]);
@@ -27,12 +23,10 @@ pub fn add_step(steps: &mut Vec<i8>) {
     steps.push(if up != last { up } else { last - 4 });
 }
 
-/// How many arp steps fit into a sound of `sound_secs`.
 pub fn steps_that_fit(sound_secs: f32, step_secs: f32) -> usize {
     if step_secs <= 0.0 || sound_secs <= 0.0 { 0 } else { (sound_secs / step_secs).floor() as usize }
 }
 
-/// Index of the step playing at `progress` (0..1 of the rendered sound).
 pub fn playing_step(progress: f32, sound_secs: f32, step_secs: f32, n: usize) -> Option<usize> {
     (n > 0 && step_secs > 0.0).then(|| (progress * sound_secs / step_secs) as usize % n)
 }
@@ -41,7 +35,6 @@ const BAR_W: f32 = 30.0;
 const BAR_H: f32 = 120.0;
 const BAR_GAP: f32 = 6.0;
 
-/// Vertical semitone bars, -24..=24 with a zero line. Drag to set, double click for 0.
 pub fn bars(ui: &mut Ui, steps: &mut [i8], playing: Option<usize>) -> Response {
     let p = palette(ui);
     let n = steps.len().max(1) as f32;

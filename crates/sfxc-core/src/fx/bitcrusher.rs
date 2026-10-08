@@ -1,6 +1,5 @@
 use super::mix;
 
-/// Bit-depth reduction plus sample-and-hold rate reduction.
 pub struct Bitcrusher {
     levels: f32,
     step: f32,

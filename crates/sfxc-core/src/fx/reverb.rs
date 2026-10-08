@@ -15,7 +15,6 @@ struct Allpass {
     i: usize,
 }
 
-/// Freeverb-style reverb: pre-delay → 8 parallel damped combs → 4 series all-passes.
 pub struct Reverb {
     combs: Vec<Comb>,
     allpasses: Vec<Allpass>,

@@ -1,4 +1,3 @@
-/// Feed-forward peak compressor with dB-domain attack/release smoothing.
 pub struct Compressor {
     threshold_db: f32,
     ratio: f32,

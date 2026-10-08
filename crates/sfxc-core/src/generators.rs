@@ -1,6 +1,3 @@
-//! sfxr-style generators: each category draws parameters from ranges that sound
-//! like that kind of effect. `mutate` nudges an existing sound.
-
 use crate::mode::{map_source_to_mode, NES_DUTIES};
 use crate::patch::*;
 use crate::rng::Rng;
@@ -66,7 +63,6 @@ fn fm(rng: &mut Rng) -> Source {
     Source::Fm { algorithm: *rng.pick(&FmAlgorithm::ALL), feedback: rng.range(0.0, 0.5), ops }
 }
 
-/// A pitched source from `choices`; in 16-bit mode sometimes FM instead.
 fn tonal(rng: &mut Rng, mode: Mode, choices: &[u8]) -> Source {
     let s = match *rng.pick(choices) {
         PULSE => pulse(rng, mode),
@@ -207,14 +203,11 @@ pub fn generate(category: Category, mode: Mode, seed: u64) -> SoundPatch {
     p
 }
 
-/// Small random variation of every parameter; keeps mode and effects chain.
 pub fn mutate(patch: &SoundPatch, seed: u64) -> SoundPatch {
     let mut rng = Rng::new(seed);
     let r = &mut rng;
     let mut p = patch.clone();
-    // Absolute nudge: up to 5% of the parameter's full range.
     let nudge = |r: &mut Rng, v: &mut f32, range: Range| *v += r.bipolar() * 0.05 * (range.1 - range.0);
-    // Relative nudge for times: up to ±20%.
     let scale = |r: &mut Rng, v: &mut f32| *v *= 1.0 + r.bipolar() * 0.2;
     for l in &mut p.layers {
         l.pitch.base_freq *= 2f32.powf(r.bipolar() * 0.25);

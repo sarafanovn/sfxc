@@ -6,14 +6,12 @@ use sfxc_core::patch::Mode;
 use super::theme::{self, palette};
 use super::widgets::{self, dropdown, field, toggle};
 
-/// Export settings; kept between exports for the session.
 pub struct ExportDialog {
     pub ogg: bool,
     pub ogg_quality: f32,
     pub sample_rate: u32,
     pub normalize: bool,
     pub trim: bool,
-    /// When true the export is exactly `seconds` long instead of the sound's natural length.
     pub fixed_length: bool,
     pub seconds: f32,
 }
@@ -32,10 +30,8 @@ impl Default for ExportDialog {
     }
 }
 
-/// Range of the fixed export length, in seconds.
 const SECONDS: (f32, f32) = (0.05, 10.0);
 
-/// WAV bit depth that goes with a sound's mode: 8-bit exports 8-bit, 16-bit exports 16-bit, Modern exports 24-bit.
 pub fn wav_bits(mode: Mode) -> u16 {
     match mode {
         Mode::Bit8 => 8,
@@ -55,7 +51,6 @@ impl ExportDialog {
         }
     }
 
-    /// One line describing the settings the folded panel hides (the sample rate is always in view).
     pub fn summary(&self, mode: Mode) -> String {
         let depth = if self.ogg { format!("quality {:.0}", self.ogg_quality) } else { format!("{}-bit", wav_bits(mode)) };
         let length = if self.fixed_length { format!("{:.2} s", self.seconds) } else { "auto length".to_string() };
@@ -63,8 +58,6 @@ impl ExportDialog {
     }
 }
 
-/// Foldable "Export settings" at the bottom of the main card: the header shows the format, the body the options
-/// in one wrapping row. Folded by default; the state is remembered.
 pub fn panel(ui: &mut Ui, d: &mut ExportDialog, natural_secs: Option<f32>) {
     let p = palette(ui);
     let id = ui.make_persistent_id("export_panel");
@@ -80,7 +73,6 @@ pub fn panel(ui: &mut Ui, d: &mut ExportDialog, natural_secs: Option<f32>) {
         if ui.add(title.sense(Sense::click())).on_hover_cursor(CursorIcon::PointingHand).clicked() {
             state.toggle(ui);
         }
-        // Once open, the Format field below says the same.
         if !state.is_open() {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.label(widgets::hint(ui, if d.ogg { "OGG" } else { "WAV" }));
@@ -102,7 +94,6 @@ pub fn panel(ui: &mut Ui, d: &mut ExportDialog, natural_secs: Option<f32>) {
             }
             field(ui, "Length", |ui| {
                 if dropdown(ui, "export_length", 80.0, &mut d.fixed_length, &[(false, "Auto"), (true, "Fixed")]) && d.fixed_length {
-                    // Start from the length the waveform shows, so the two agree until the slider moves.
                     if let Some(n) = natural_secs {
                         d.seconds = n.clamp(SECONDS.0, SECONDS.1);
                     }

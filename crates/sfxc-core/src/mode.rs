@@ -1,5 +1,3 @@
-//! What each mode allows, how sources are mapped into it, and the mode's output stage.
-
 use std::f32::consts::TAU;
 
 use crate::patch::{Mode, NoiseKind, Source};
@@ -18,7 +16,6 @@ pub fn is_allowed(source: &Source, mode: Mode) -> bool {
     }
 }
 
-/// Nearest source the mode allows. Identity for Modern and 16-bit.
 pub fn map_source_to_mode(source: &Source, mode: Mode) -> Source {
     if mode != Mode::Bit8 {
         return *source;
@@ -39,12 +36,10 @@ pub fn map_source_to_mode(source: &Source, mode: Mode) -> Source {
     }
 }
 
-/// One-line note for the UI when switching mode changed the source.
 pub fn describe_mapping(from: &Source, to: &Source) -> Option<String> {
     (from != to).then(|| format!("8-bit mode changed {} to {}", from.label(), to.label()))
 }
 
-/// Mode-specific coloration applied after the master effects.
 pub struct OutputStage {
     mode: Mode,
     hold_step: f32,
@@ -97,7 +92,6 @@ impl OutputStage {
 
 pub const LIMIT: f32 = 0.98;
 
-/// Instant-attack peak limiter. Output magnitude never exceeds `LIMIT`.
 pub struct Limiter {
     env: f32,
     release: f32,

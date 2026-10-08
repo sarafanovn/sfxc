@@ -1,8 +1,3 @@
-//! Design tokens, fonts and egui styles for the light and dark themes.
-//!
-//! Zinc neutrals plus one accent. The accent hue is a user setting; accent colors
-//! are derived from it in OKLCH. Corner radii follow one rule: controls 6, cards 10, dialogs 14.
-
 use eframe::egui::{
     self, Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Id, Margin, Shadow, Stroke, TextStyle, Theme,
     ThemePreference, Visuals,
@@ -14,26 +9,18 @@ pub const R_CONTROL: u8 = 6;
 pub const R_CARD: u8 = 10;
 pub const R_DIALOG: u8 = 14;
 
-/// Motion timings in seconds; set to 0 to disable animation.
 pub const T_HOVER: f32 = 0.15;
 pub const T_PRESS: f32 = 0.08;
 pub const T_RELEASE: f32 = 0.25;
 
-/// Semantic colors. Code outside this module never uses raw hex values.
 #[derive(Clone, Copy)]
 pub struct Palette {
-    /// Sidebars and title bar.
     pub chrome: Color32,
-    /// Editor background behind the cards.
     pub canvas: Color32,
-    /// Cards, dialogs, popups.
     pub surface: Color32,
-    /// Buttons and inputs at rest.
     pub raised: Color32,
     pub hover: Color32,
-    /// Sunken track behind segmented controls and the search field.
     pub well: Color32,
-    /// Selected segment.
     pub knob: Color32,
     pub border: Color32,
     pub border_strong: Color32,
@@ -42,20 +29,15 @@ pub struct Palette {
     pub faint: Color32,
     pub accent: Color32,
     pub accent_hover: Color32,
-    /// Text and icons on top of `accent`.
     pub on_accent: Color32,
-    /// Tinted background for selected rows and accent badges.
     pub accent_soft: Color32,
-    /// Accent-colored text on `accent_soft` or neutral surfaces.
     pub accent_text: Color32,
     pub danger: Color32,
     pub danger_soft: Color32,
     pub warn: Color32,
     pub warn_soft: Color32,
     pub shadow: Color32,
-    /// Highlight side of soft relief (top-left).
     pub shadow_light: Color32,
-    /// Shade side of soft relief (bottom-right).
     pub shadow_dark: Color32,
 }
 
@@ -117,7 +99,6 @@ pub const LIGHT: Palette = Palette {
     shadow_dark: Color32::from_rgba_unmultiplied_const(150, 162, 184, 150),
 };
 
-/// OKLCH lightness and chroma of each accent role; the hue comes from the user.
 struct AccentLevels {
     accent: (f32, f32),
     hover: (f32, f32),
@@ -148,7 +129,6 @@ fn palette_id(dark: bool) -> Id {
     Id::new(("sfxc_palette", dark))
 }
 
-/// Rebuilds both palettes for `hue` and restyles egui with them.
 pub fn set_accent(ctx: &egui::Context, hue: f32) {
     let light = with_accent(LIGHT, hue, false);
     let dark = with_accent(DARK, hue, true);
@@ -172,7 +152,6 @@ pub fn palette_of(ctx: &egui::Context) -> Palette {
     palette_for(ctx, ctx.theme() == Theme::Dark)
 }
 
-/// User-facing theme setting, stored in the library as a string.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ThemeChoice {
     Auto,
@@ -221,7 +200,6 @@ impl ThemeChoice {
     }
 }
 
-/// Interface size presets, applied as egui zoom.
 pub const UI_SCALES: [(f32, &str); 3] = [(0.9, "Compact"), (1.0, "Default"), (1.15, "Large")];
 
 pub fn semibold() -> FontFamily {
@@ -303,7 +281,6 @@ fn visuals(p: &Palette, dark: bool) -> Visuals {
     v.warn_fg_color = p.warn;
     v.error_fg_color = p.danger;
     v.weak_text_color = Some(p.faint);
-    // Soft tint keeps selected text readable; focus rings use the stroke.
     v.selection.bg_fill = p.accent_soft;
     v.selection.stroke = Stroke::new(1.0, p.accent_text);
     v.slider_trailing_fill = true;

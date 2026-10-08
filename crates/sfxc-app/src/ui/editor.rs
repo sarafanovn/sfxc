@@ -12,11 +12,9 @@ use super::widgets::{
 use super::export_dialog::{self, ExportDialog};
 use super::{arp, controls, effects, eq_graph, order, Action, Current};
 
-/// Sound-settings cards, in their default order. The user can drag them into another order.
 pub const SETTINGS: [&str; 5] = ["generate", "pitch", "envelope", "eq", "effects"];
 pub const SETTINGS_ORDER: &str = "settings_order";
 
-/// Read-only state the editor shows but does not own.
 pub struct View<'a> {
     pub rendered: Option<(&'a [f32], u32)>,
     pub rendered_generation: u64,
@@ -26,7 +24,6 @@ pub struct View<'a> {
     pub audio_error: Option<&'a str>,
 }
 
-/// Widest the editor content gets; wider windows add side margins.
 const MAX_CONTENT: f32 = 720.0;
 
 pub fn show(
@@ -70,7 +67,6 @@ pub fn show(
                 actions.push(Action::SaveSectionOrder(order::save(&sections)));
             }
             ui.data_mut(|d| d.insert_temp(order_id, sections));
-
         });
     });
 }
@@ -110,7 +106,6 @@ fn header(ui: &mut Ui, cur: &mut Current, view: &View, export: &mut ExportDialog
     tag_row(ui, cur, actions);
 }
 
-/// Tags are stored as one whitespace-separated string; these helpers treat it as a list.
 pub fn parse_tags(s: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for t in s.split(|c: char| c.is_whitespace() || c == ',').map(|t| t.trim_start_matches('#')).filter(|t| !t.is_empty()) {
@@ -121,7 +116,6 @@ pub fn parse_tags(s: &str) -> Vec<String> {
     out
 }
 
-/// Chips with a remove button each, followed by a field that adds a tag on Enter, space or comma.
 fn tag_row(ui: &mut Ui, cur: &mut Current, actions: &mut Vec<Action>) {
     let p = palette(ui);
     let mut tags = parse_tags(&cur.tags);
@@ -178,7 +172,6 @@ fn tag_row(ui: &mut Ui, cur: &mut Current, actions: &mut Vec<Action>) {
     }
 }
 
-/// One flat tag chip. Returns true when its remove button was clicked.
 fn tag_chip(ui: &mut Ui, tag: &str) -> bool {
     let p = palette(ui);
     let galley = ui.painter().layout_no_wrap(tag.to_string(), FontId::proportional(12.0), p.muted);
@@ -195,7 +188,6 @@ fn tag_chip(ui: &mut Ui, tag: &str) -> bool {
     x.clicked()
 }
 
-/// Main card: listening on top, then the sound's format and oscillator in one dense row, then export settings.
 #[allow(clippy::too_many_arguments)]
 fn transport(
     ui: &mut Ui,
@@ -242,12 +234,10 @@ fn transport(
                     if cur.patch.layers[0].source != before {
                         *mode_note = None;
                     }
-                    // What the mode switch changed, next to the wave it changed.
                     if let Some(note) = mode_note.as_deref() {
                         let color = palette(ui).accent_text;
                         let (rect, resp) = ui.allocate_exact_size(Vec2::splat(28.0), Sense::click());
                         ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, icon::INFO, FontId::proportional(16.0), color);
-                        // Shown at once while hovered, without egui's still-pointer delay.
                         if resp.on_hover_cursor(CursorIcon::Help).hovered() {
                             egui::Tooltip::always_open(ui.ctx().clone(), ui.layer_id(), Id::new("mode_note_tip"), egui::PopupAnchor::Pointer)
                                 .show(|ui| {
@@ -288,7 +278,6 @@ fn category_icon(c: Category) -> &'static str {
     }
 }
 
-/// "Generate sample" card: one button per category, laid out like the other settings cards.
 fn generators(ui: &mut Ui, grip: Grip, actions: &mut Vec<Action>) -> Option<(usize, usize)> {
     section(ui, "generate", "Generate sample", Some(grip), |_| {}, |ui| {
         const COLUMNS: usize = 4;
@@ -324,7 +313,6 @@ fn apply_mode(patch: &mut SoundPatch, note: &mut Option<String>) {
     }
 }
 
-/// Muted label column matching [`param`] rows, followed by `add`.
 fn labeled(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui)) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 10.0;
@@ -333,7 +321,6 @@ fn labeled(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui)) {
     });
 }
 
-/// Waveform choice and its parameter, as fields of the main card's settings row.
 fn wave_field(ui: &mut Ui, layer: &mut Layer, mode: Mode) {
     // FM is not offered for now; a sound that already uses it keeps its controls below the row.
     let all: Vec<&'static str> = Source::KIND_NAMES.iter().copied().filter(|k| *k != "FM").collect();
@@ -345,7 +332,6 @@ fn wave_field(ui: &mut Ui, layer: &mut Layer, mode: Mode) {
     }
 }
 
-/// Settings that only some waves have: duty for pulse, the noise type.
 fn wave_extras(ui: &mut Ui, layer: &mut Layer, mode: Mode) {
     match &mut layer.source {
         Source::Pulse { duty } if mode == Mode::Bit8 => {
@@ -368,7 +354,6 @@ fn wave_extras(ui: &mut Ui, layer: &mut Layer, mode: Mode) {
     }
 }
 
-/// Waveform dropdown that shows the chosen wave's shape next to its name, closed or open.
 fn wave_select(ui: &mut Ui, kind: &mut &'static str, kinds: &[&'static str]) {
     let p = palette(ui);
     let mut job = egui::text::LayoutJob::default();
@@ -386,7 +371,6 @@ fn wave_select(ui: &mut Ui, kind: &mut &'static str, kinds: &[&'static str]) {
     ui.painter().add(egui::Shape::line(wave_points(kind, wave), egui::Stroke::new(1.5, p.accent_text)));
 }
 
-/// One cycle-or-two of the named waveform as a polyline inside `rect`.
 fn wave_points(name: &str, rect: Rect) -> Vec<Pos2> {
     const N: usize = 48;
     let cycles = 2.0;
@@ -401,7 +385,6 @@ fn wave_points(name: &str, rect: Rect) -> Vec<Pos2> {
                 "Saw" => 1.0 - 2.0 * ph,
                 "Triangle" => 1.0 - 4.0 * (ph - 0.5).abs(),
                 "Noise" => {
-                    // Fixed pseudo-random wiggle, so the icon does not change between frames.
                     let h = (i as u32).wrapping_mul(2_654_435_761) >> 16;
                     (h % 1000) as f32 / 500.0 - 1.0
                 }
@@ -412,7 +395,6 @@ fn wave_points(name: &str, rect: Rect) -> Vec<Pos2> {
         .collect()
 }
 
-/// Dropdown entry: a small drawing of the waveform, then its name.
 fn wave_option(ui: &mut Ui, value: &mut &'static str, name: &'static str) {
     let p = palette(ui);
     let selected = *value == name;
@@ -477,7 +459,6 @@ fn arp_section(ui: &mut Ui, layer: &mut Layer, view: &View, grip: Grip) -> Optio
     let sound_secs = sfxc_core::env::length(&layer.env);
     let pitch = &mut layer.pitch;
     let mut enabled = pitch.arp_enabled;
-    // The header toggle owns `enabled` while the section draws; the body reads this copy.
     let body_enabled = enabled;
     let moved = section(ui, "arp", "Arpeggio", Some(grip), |ui| {
         toggle(ui, &mut enabled, "").on_hover_text(if body_enabled { "Turn arpeggio off" } else { "Turn arpeggio on" });
@@ -510,7 +491,6 @@ fn arp_section(ui: &mut Ui, layer: &mut Layer, view: &View, grip: Grip) -> Optio
                 ui.add_space(4.0);
                 param(ui, "Step", &mut pitch.arp_speed, ranges::ARP_SPEED, d.arp_speed, " s", true);
                 let fit = arp::steps_that_fit(sound_secs, pitch.arp_speed);
-                // One line either way, so the section keeps its height while Step is dragged.
                 if fit < 2 {
                     let warn = palette(ui).warn;
                     ui.label(RichText::new(format!("{}  Only the first step plays: shorten Step or lengthen the envelope.", icon::WARNING)).color(warn).size(11.5));

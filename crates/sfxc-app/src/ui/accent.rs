@@ -1,12 +1,8 @@
-//! OKLCH → sRGB conversion and WCAG contrast, for deriving accent colors from a hue.
-
 use eframe::egui::Color32;
 
 pub const DEFAULT_HUE: f32 = 163.0;
-/// Red, orange, amber, green, emerald, sky, indigo, pink.
 pub const SWATCHES: [f32; 8] = [25.0, 55.0, 90.0, 140.0, 163.0, 230.0, 265.0, 320.0];
 
-/// Linear sRGB for an OKLCH color, or None when it is outside the sRGB gamut.
 fn oklch_to_linear(l: f32, c: f32, h: f32) -> Option<[f32; 3]> {
     let (a, b) = (c * h.to_radians().cos(), c * h.to_radians().sin());
     let l_ = l + 0.396_337_78 * a + 0.215_803_76 * b;
@@ -32,7 +28,6 @@ fn decode(v: u8) -> f32 {
     if s <= 0.040_45 { s / 12.92 } else { ((s + 0.055) / 1.055).powf(2.4) }
 }
 
-/// OKLCH color (`h` in degrees). Chroma shrinks until the color fits in sRGB, so the hue is kept.
 pub fn oklch(l: f32, c: f32, h: f32) -> Color32 {
     let mut c = c;
     loop {
@@ -51,14 +46,12 @@ fn luminance(c: Color32) -> f32 {
     0.2126 * decode(c.r()) + 0.7152 * decode(c.g()) + 0.0722 * decode(c.b())
 }
 
-/// WCAG 2 contrast ratio, 1..=21. Used by the contrast tests only.
 #[cfg(test)]
 pub fn contrast(a: Color32, b: Color32) -> f32 {
     let (la, lb) = (luminance(a), luminance(b));
     (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
 }
 
-/// Parses a stored hue in degrees, wrapped into 0..360.
 pub fn parse_hue(s: &str) -> Option<f32> {
     s.trim().parse::<f32>().ok().filter(|v| v.is_finite()).map(|v| v.rem_euclid(360.0))
 }
@@ -78,7 +71,6 @@ mod tests {
         let g = oklch(0.6, 0.0, 0.0);
         assert_eq!(g.r(), g.g());
         assert_eq!(g.g(), g.b());
-        // Out-of-gamut chroma is reduced, not clipped into a different hue.
         let c = oklch(0.7, 0.4, 145.0);
         assert!(c.g() > c.r() && c.g() > c.b());
     }

@@ -1,6 +1,3 @@
-//! Order of reorderable cards: moving an item and restoring a saved order.
-
-/// Moves `from` to position `to` (clamped to the last index). A bad `from` or the same position changes nothing.
 pub fn move_item<T>(items: &mut Vec<T>, from: usize, to: usize) {
     if from >= items.len() {
         return;
@@ -12,7 +9,6 @@ pub fn move_item<T>(items: &mut Vec<T>, from: usize, to: usize) {
     }
 }
 
-/// Order from its saved text: unknown and repeated keys are dropped, missing ones are appended in default order.
 pub fn restore(saved: &str, defaults: &[&str]) -> Vec<String> {
     let mut out: Vec<String> = Vec::with_capacity(defaults.len());
     for key in saved.split(',').map(str::trim) {

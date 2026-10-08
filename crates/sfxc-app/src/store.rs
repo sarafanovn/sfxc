@@ -1,5 +1,3 @@
-//! SQLite library: sounds with an autosaved draft and an append-only version history.
-
 use std::path::Path;
 
 use anyhow::{bail, Context, Result};
@@ -58,7 +56,6 @@ pub struct Store {
 }
 
 impl Store {
-    /// Opens or creates the library. Fails (without modifying the file) if it is damaged.
     pub fn open(path: &Path) -> Result<Self> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).with_context(|| format!("cannot create {}", dir.display()))?;
@@ -173,8 +170,6 @@ impl Store {
         Ok(self.latest_version(sound_id)?.is_none_or(|(_, json)| json != draft))
     }
 
-    /// Snapshots the draft as a version. If the draft equals the latest version, no new
-    /// version is created; a non-empty note is attached to the latest one instead.
     pub fn commit_version(&self, sound_id: i64, note: &str, now: i64) -> Result<i64> {
         let draft = self.draft_json(sound_id)?;
         let tx = self.conn.unchecked_transaction()?;
@@ -235,7 +230,6 @@ impl Store {
         SoundPatch::from_json(&json).context("version is unreadable")
     }
 
-    /// Keeps the current draft as a version, then makes `version_id` the draft.
     pub fn restore_version(&self, sound_id: i64, version_id: i64, now: i64) -> Result<SoundPatch> {
         let patch = self.load_version(version_id)?;
         self.commit_version(sound_id, "", now)?;
@@ -278,7 +272,6 @@ impl Store {
         Ok(())
     }
 
-    /// App preferences (theme, interface size) as plain key/value strings.
     pub fn setting(&self, key: &str) -> Result<Option<String>> {
         Ok(self.conn.query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| r.get(0)).optional()?)
     }

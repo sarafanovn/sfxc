@@ -2,7 +2,6 @@ use std::f32::consts::{PI, TAU};
 
 use super::mix;
 
-/// Cascade of first-order all-pass stages swept by a sine LFO (200–3200 Hz).
 pub struct Phaser {
     depth: f32,
     stages: usize,

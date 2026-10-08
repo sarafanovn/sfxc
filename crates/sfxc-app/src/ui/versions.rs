@@ -61,7 +61,6 @@ pub fn show(ui: &mut egui::Ui, versions: &[VersionInfo], current: Option<i64>, h
     });
 }
 
-/// One timeline item: a node in the left gutter and a line to the next item.
 fn entry(ui: &mut egui::Ui, draft: bool, last: bool, body: impl FnOnce(&mut egui::Ui)) -> Rect {
     let p = palette(ui);
     let top = ui.cursor().top();

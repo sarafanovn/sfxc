@@ -1,6 +1,3 @@
-//! Plays rendered buffers on the default output device via CoreAudio (cpal).
-//! A missing or lost device never blocks editing; we retry every few seconds.
-
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
@@ -11,10 +8,8 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
 const RETRY_EVERY: Duration = Duration::from_secs(3);
 
-/// Playback volume (amplitude) when nothing is stored yet.
 pub const DEFAULT_VOLUME: f32 = 0.8;
 
-/// Slider position (0..1) → amplitude. Squared so the lower half of the slider stays usable.
 pub fn volume_from_slider(pos: f32) -> f32 {
     pos.clamp(0.0, 1.0).powi(2)
 }
@@ -23,7 +18,6 @@ pub fn slider_from_volume(amp: f32) -> f32 {
     amp.clamp(0.0, 1.0).sqrt()
 }
 
-/// Parses a stored volume; garbage and NaN are rejected, out-of-range values clamped.
 pub fn parse_volume(s: &str) -> Option<f32> {
     s.trim().parse::<f32>().ok().filter(|v| v.is_finite()).map(|v| v.clamp(0.0, 1.0))
 }
@@ -33,7 +27,6 @@ enum Command {
     Stop,
 }
 
-/// Playhead shared with the audio thread. `len` is 0 when nothing is queued.
 #[derive(Default)]
 struct Position {
     pos: AtomicUsize,
@@ -144,7 +137,6 @@ impl Player {
         self.error.as_deref()
     }
 
-    /// Output gain applied while playing; takes effect immediately, also mid-sound.
     pub fn set_volume(&self, amp: f32) {
         self.volume.store(amp.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
     }
@@ -160,7 +152,6 @@ impl Player {
         self.send(Command::Play(samples));
     }
 
-    /// Stops playback immediately; the next `play` starts from the beginning.
     pub fn stop(&mut self) {
         self.position.pos.store(0, Ordering::Relaxed);
         self.position.len.store(0, Ordering::Relaxed);
@@ -179,19 +170,16 @@ impl Player {
         (self.position.pos.load(Ordering::Relaxed), self.position.len.load(Ordering::Relaxed))
     }
 
-    /// True while a buffer is queued and not yet played to the end.
     pub fn is_playing(&self) -> bool {
         let (pos, len) = self.playhead();
         pos < len
     }
 
-    /// Fraction of the current buffer already played, while something is playing.
     pub fn progress(&self) -> Option<f32> {
         let (pos, len) = self.playhead();
         (self.stream.is_some() && pos < len).then(|| pos as f32 / len as f32)
     }
 
-    /// Call once per UI frame.
     pub fn maintain(&mut self) {
         self.sent.retain(|b| Arc::strong_count(b) > 1);
         if self.failed.swap(false, Ordering::SeqCst) {

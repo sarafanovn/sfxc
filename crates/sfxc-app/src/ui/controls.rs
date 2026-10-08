@@ -1,5 +1,3 @@
-//! Custom value controls: horizontal track and rotary knob, sharing one input model.
-
 use eframe::egui::{
     self, emath::Numeric, vec2, Align2, CursorIcon, FontId, Id, Key, LayerId, Order, Pos2, Rect, Response, Sense, Shape, Stroke, Ui, Vec2,
 };
@@ -7,13 +5,10 @@ use eframe::egui::{
 use super::material::{self, Motion};
 use super::theme::{palette, Palette};
 
-/// Lower end of a log scale. Ranges that start at 0 (envelope times) use a small positive floor,
-/// since `ln(0)` is not finite.
 fn log_floor(lo: f64, hi: f64) -> f64 {
     if lo > 0.0 { lo } else { (hi * 1e-4).max(1e-6) }
 }
 
-/// Value → 0..1 position. Values at or below the floor of a log scale map to 0.
 pub fn to_norm(v: f64, lo: f64, hi: f64, log: bool) -> f32 {
     let t = if log {
         let floor = log_floor(lo, hi);
@@ -36,8 +31,6 @@ pub fn from_norm(t: f32, lo: f64, hi: f64, log: bool) -> f64 {
     (floor.ln() + t * (hi.ln() - floor.ln())).exp().max(lo)
 }
 
-/// The wheel edits a value only while the control is hovered and either focused or Alt is held;
-/// otherwise it scrolls the page.
 pub fn wheel_allowed(focused: bool, hovered: bool, alt: bool) -> bool {
     hovered && (focused || alt)
 }
@@ -54,8 +47,6 @@ fn format_value(v: f64, integral: bool, suffix: &str) -> String {
     format!("{s}{suffix}")
 }
 
-/// Shared input model. `per_point` is the normalized change per point of drag along `axis`
-/// (positive x or negative y). Returns true when `t` changed.
 fn input(ui: &Ui, resp: &mut Response, t: &mut f32, per_point: f32, vertical: bool) -> bool {
     let before = *t;
     let fine = ui.input(|i| i.modifiers.shift);
@@ -94,7 +85,6 @@ fn input(ui: &Ui, resp: &mut Response, t: &mut f32, per_point: f32, vertical: bo
     *t != before
 }
 
-/// Writes `t` back into `v`, handles double-click reset, marks the response changed.
 #[allow(clippy::too_many_arguments)]
 fn commit<N: Numeric>(resp: &mut Response, v: &mut N, t: f32, lo: N, hi: N, default: N, log: bool, moved: bool) {
     if resp.double_clicked() {
@@ -113,7 +103,6 @@ fn commit<N: Numeric>(resp: &mut Response, v: &mut N, t: f32, lo: N, hi: N, defa
     }
 }
 
-/// Value bubble next to the pointer while dragging.
 fn bubble(ui: &Ui, id: Id, text: &str, p: &Palette) {
     let Some(pos) = ui.ctx().pointer_interact_pos() else { return };
     let painter = ui.ctx().layer_painter(LayerId::new(Order::Tooltip, id.with("bubble")));
@@ -124,13 +113,11 @@ fn bubble(ui: &Ui, id: Id, text: &str, p: &Palette) {
     painter.galley(rect.min + vec2(6.0, 3.0), galley, p.text);
 }
 
-/// Horizontal fader: recessed track, accent fill, raised handle.
 #[allow(clippy::too_many_arguments)]
 pub fn track<N: Numeric>(ui: &mut Ui, v: &mut N, lo: N, hi: N, default: N, log: bool, width: f32) -> Response {
     track_inner(ui, v, lo, hi, default, log, width, true)
 }
 
-/// Like [`track`], without the value bubble while dragging.
 pub fn track_quiet<N: Numeric>(ui: &mut Ui, v: &mut N, lo: N, hi: N, default: N, log: bool, width: f32) -> Response {
     track_inner(ui, v, lo, hi, default, log, width, false)
 }
@@ -161,7 +148,6 @@ fn track_inner<N: Numeric>(ui: &mut Ui, v: &mut N, lo: N, hi: N, default: N, log
     resp.on_hover_cursor(CursorIcon::ResizeHorizontal)
 }
 
-/// Rotary knob with label below and value shown on hover or drag.
 #[allow(clippy::too_many_arguments)]
 pub fn knob<N: Numeric>(ui: &mut Ui, label: &str, v: &mut N, lo: N, hi: N, default: N, suffix: &str, log: bool) -> Response {
     let p = palette(ui);

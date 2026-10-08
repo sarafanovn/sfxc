@@ -1,7 +1,3 @@
-//! Master effects chain: a horizontal strip of tall cards in signal order. Every card has a fixed rail on its
-//! left (handle, fold caret, the name reading upward, bypass, remove); open, the knobs sit to the right of it.
-//! Folding only hides the knobs: the rail never moves, so the card just narrows to it.
-
 use eframe::egui::{self, vec2, Align, Align2, CursorIcon, FontId, Id, Layout, Pos2, Rect, Sense};
 use egui_phosphor::regular as icon;
 use sfxc_core::patch::{ranges::*, DistortionKind, Effect, EffectKind};
@@ -14,10 +10,8 @@ use super::widgets::{drop_zone, grip_handle, icon_button, knob, knob_num, power_
 const CARD_W: f32 = 224.0;
 const CARD_H: f32 = 300.0;
 const GAP: f32 = 12.0;
-/// Width of the rail, and of a folded card.
 const RAIL_W: f32 = 44.0;
 const PICK_ROW: f32 = 30.0;
-/// Seconds the card takes to widen or narrow.
 const FOLD_TIME: f32 = 0.12;
 
 pub enum Op {
@@ -26,7 +20,6 @@ pub enum Op {
     Add(EffectKind),
 }
 
-/// Applies one edit to the chain. Stale indices are ignored, so a late click cannot panic.
 pub fn apply(effects: &mut Vec<Effect>, op: Op, next_id: u64) {
     match op {
         Op::Move(from, to) => order::move_item(effects, from, to),
@@ -38,7 +31,6 @@ pub fn apply(effects: &mut Vec<Effect>, op: Op, next_id: u64) {
     }
 }
 
-/// The "Effects" section: a card like the sound-settings ones, holding the strip of effect cards.
 pub fn show(ui: &mut egui::Ui, effects: &mut Vec<Effect>, next_id: u64, grip: Grip) -> Option<(usize, usize)> {
     let mut op = None;
     let moved = section(ui, "effects", "Effects", Some(grip), |_| {}, |ui| {
@@ -53,7 +45,6 @@ pub fn show(ui: &mut egui::Ui, effects: &mut Vec<Effect>, next_id: u64, grip: Gr
                 let (rect, _) = ui.allocate_exact_size(vec2(CARD_W, CARD_H), Sense::hover());
                 add_card(ui, rect, &mut op);
             });
-            // Room for the floating scroll bar.
             ui.add_space(12.0);
         });
     });
@@ -63,7 +54,6 @@ pub fn show(ui: &mut egui::Ui, effects: &mut Vec<Effect>, next_id: u64, grip: Gr
     moved
 }
 
-/// One effect. Returns `(from, to)` when another card was dropped on it.
 fn card(ui: &mut egui::Ui, effect: &mut Effect, i: usize, op: &mut Option<Op>) -> Option<(usize, usize)> {
     let p = palette(ui);
     let open_id = Id::new(("fx_open", effect.id));
@@ -73,10 +63,8 @@ fn card(ui: &mut egui::Ui, effect: &mut Effect, i: usize, op: &mut Option<Op>) -
     let grip = Grip { group: "effects", index: i };
     let title_color = if effect.enabled { p.text } else { p.faint };
 
-    // Sunken cell; a bypassed one is nearly flat.
     material::recessed(ui.painter(), rect, R_CARD as f32, &p, if effect.enabled { 0.5 } else { 0.12 });
 
-    // Rail: the same in both states.
     let rail = Rect::from_min_size(rect.min, vec2(RAIL_W, CARD_H));
     let mut top = ui.new_child(egui::UiBuilder::new().max_rect(rail.shrink2(vec2(4.0, 6.0))).layout(Layout::top_down(Align::Center)));
     top.spacing_mut().item_spacing.y = 4.0;
@@ -92,7 +80,6 @@ fn card(ui: &mut egui::Ui, effect: &mut Effect, i: usize, op: &mut Option<Op>) -
     }
     power_toggle(&mut foot, &mut effect.enabled).on_hover_text(if effect.enabled { "Bypass" } else { "Enable" });
 
-    // Name between the buttons, hanging from the top and reading upward; clicking it folds or unfolds.
     let galley = ui.painter().layout_no_wrap(effect.kind.name().to_owned(), FontId::new(13.5, theme::semibold()), title_color);
     let zone = Rect::from_min_max(Pos2::new(rail.left(), rail.top() + 76.0), Pos2::new(rail.right(), rail.bottom() - 80.0));
     if ui.interact(zone, open_id.with("title"), Sense::click()).on_hover_cursor(CursorIcon::PointingHand).on_hover_text(caret_tip).clicked() {
@@ -101,7 +88,6 @@ fn card(ui: &mut egui::Ui, effect: &mut Effect, i: usize, op: &mut Option<Op>) -
     let pos = Pos2::new(rail.center().x - galley.size().y / 2.0, zone.top() + galley.size().x);
     ui.painter().add(egui::epaint::TextShape::new(pos, galley, title_color).with_angle(-std::f32::consts::FRAC_PI_2));
 
-    // Knobs right of the rail, laid out at full width and uncovered as the card widens.
     if t > 0.0 {
         let body = Rect::from_min_size(Pos2::new(rail.right() + 2.0, rect.top() + 12.0), vec2(CARD_W - RAIL_W - 12.0, CARD_H - 24.0));
         let mut body_ui = ui.new_child(egui::UiBuilder::new().max_rect(body).layout(Layout::left_to_right(Align::TOP).with_main_wrap(true)));
@@ -114,8 +100,6 @@ fn card(ui: &mut egui::Ui, effect: &mut Effect, i: usize, op: &mut Option<Op>) -
     drop_zone(ui, rect, grip, Axis::Horizontal, GAP / 2.0 + ui.spacing().item_spacing.x / 2.0)
 }
 
-/// The trailing slot: a sunken well like the effect cards, with a quiet "+". Clicking turns it into
-/// the list of effects; picking one, Esc or a click elsewhere turns it back.
 fn add_card(ui: &mut egui::Ui, rect: Rect, op: &mut Option<Op>) {
     let p = palette(ui);
     let open_id = Id::new("fx_add_open");

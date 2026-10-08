@@ -1,6 +1,5 @@
 use super::wrap_next;
 
-/// Feedback echo with a one-pole low-pass in the loop. Output = dry + mix * echo.
 pub struct Delay {
     buf: Vec<f32>,
     w: usize,

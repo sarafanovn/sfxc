@@ -1,5 +1,3 @@
-//! Rendering for export and encoding to WAV / OGG Vorbis.
-
 use std::fs::File;
 use std::io::{BufWriter, Seek, Write};
 use std::num::{NonZeroU32, NonZeroU8};
@@ -21,7 +19,6 @@ const OGG_SERIAL: i32 = 0x5F78_6373;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ExportFormat {
     Wav { bits: u16 },
-    /// Quality 0–10.
     Ogg { quality: f32 },
 }
 
@@ -40,8 +37,6 @@ pub struct ExportOptions {
     pub sample_rate: u32,
     pub normalize: bool,
     pub trim: bool,
-    /// Exact length in seconds. `None` keeps the sound's natural length. A longer sound is cut with a short
-    /// fade-out, a shorter one is padded with silence.
     pub duration: Option<f32>,
 }
 
@@ -51,10 +46,8 @@ impl Default for ExportOptions {
     }
 }
 
-/// Fade applied when a sound is cut short, so the cut does not click.
 const CUT_FADE_SECONDS: f32 = 0.005;
 
-/// Makes `samples` exactly `seconds` long.
 fn fit_duration(samples: &mut Vec<f32>, seconds: f32, sample_rate: u32) {
     let target = (seconds.max(0.0) * sample_rate as f32).round() as usize;
     if samples.len() > target {
@@ -119,7 +112,6 @@ pub fn write_ogg<W: Write>(samples: &[f32], sample_rate: u32, quality: f32, w: W
     Ok(())
 }
 
-/// Renders and writes atomically: encodes to `<path>.part`, then renames.
 pub fn export_to_path(patch: &SoundPatch, opts: &ExportOptions, path: &Path) -> Result<()> {
     let samples = prepare(patch, opts);
     let tmp = path.with_extension("part");

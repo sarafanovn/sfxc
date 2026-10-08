@@ -1,5 +1,3 @@
-//! Main window: wires store, renderer, player and the panels together.
-
 mod accent;
 mod arp;
 mod controls;
@@ -33,21 +31,16 @@ use library::Prefs;
 use theme::ThemeChoice;
 use widgets::{button, dialog, Kind};
 
-/// Commit an automatic version after this long with unversioned changes.
 const AUTO_VERSION_SECS: i64 = 300;
 const AUTO_VERSION_CHECK: Duration = Duration::from_secs(10);
-/// Debounce for writing the draft to disk.
 const DRAFT_SAVE_DELAY: Duration = Duration::from_millis(500);
 const TOAST_TIME: Duration = Duration::from_secs(4);
-/// Height of the custom title bar drawn under the macOS traffic lights.
 const TITLEBAR_H: f32 = 30.0;
 
 pub fn now_secs() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64)
 }
 
-/// Renames sound `id`. Blank names are ignored; if `id` is open, its header is
-/// synced (restored to the stored name on blank input). Returns true if the DB changed.
 fn apply_rename(store: &Store, current: Option<&mut Current>, id: i64, name: &str, now: i64) -> Result<bool> {
     let name = name.trim();
     let cur = current.filter(|c| c.id == id);
@@ -68,7 +61,6 @@ fn fresh_seed() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(1, |d| d.as_nanos() as u64)
 }
 
-/// Things panels ask for; applied after the frame's UI is drawn.
 pub enum Action {
     NewSound,
     RefreshList,
@@ -138,7 +130,6 @@ pub struct SfxcApp {
     current_version: Option<i64>,
     versions: Vec<VersionInfo>,
     history: History,
-    /// Patch as it was before the in-progress edit (slider drag); pushed to history on release.
     edit_base: Option<SoundPatch>,
     generation: u64,
     rendered: Option<RenderResult>,
@@ -188,8 +179,6 @@ impl SfxcApp {
         app
     }
 
-    // ---- preferences -------------------------------------------------------
-
     fn apply_prefs(&self) {
         self.ctx.set_theme(self.prefs.theme.preference());
         self.ctx.set_zoom_factor(self.prefs.scale);
@@ -227,8 +216,6 @@ impl SfxcApp {
         self.check(r);
     }
 
-    // ---- library / store -------------------------------------------------
-
     fn open_store(&mut self) {
         match Store::open(&self.db_path) {
             Ok(store) => {
@@ -247,7 +234,6 @@ impl SfxcApp {
         }
     }
 
-    /// Moves a damaged library aside (never deletes it) and starts a fresh one.
     fn start_new_library(&mut self) {
         let stamp = now_secs();
         let base = self.db_path.display().to_string();
@@ -501,8 +487,6 @@ impl SfxcApp {
         self.toast_ok(format!("Exported {name}"));
     }
 
-    // ---- editing / playback ------------------------------------------------
-
     fn request_render(&mut self) {
         let Some(cur) = &self.current else { return };
         self.generation += 1;
@@ -514,7 +498,6 @@ impl SfxcApp {
         });
     }
 
-    /// Space and the play button: stop if something is playing or about to, otherwise play.
     fn toggle_play(&mut self) {
         if self.play_when_ready.take().is_some() {
             return;
@@ -533,7 +516,6 @@ impl SfxcApp {
         }
     }
 
-    /// Replaces the whole patch (generators, mutate, undo/redo, restore).
     fn set_patch(&mut self, patch: SoundPatch, record_undo: bool) {
         let Some(cur) = self.current.as_mut() else { return };
         if record_undo {
@@ -577,8 +559,6 @@ impl SfxcApp {
         }
     }
 
-    /// Called every frame after the editor. `before` is the patch before this frame's
-    /// edits (None if nothing changed). An edit gesture ends when the pointer is released.
     fn after_edit(&mut self, before: Option<SoundPatch>, ctx: &egui::Context) {
         if let Some(before) = before {
             self.edit_base.get_or_insert(before);
@@ -660,8 +640,6 @@ impl SfxcApp {
         }
     }
 
-    // ---- per-frame plumbing --------------------------------------------------
-
     fn poll(&mut self, ctx: &egui::Context) {
         self.player.maintain();
         self.finish_export();
@@ -675,7 +653,6 @@ impl SfxcApp {
             }
             self.rendered = Some(r);
         }
-        // Device sample rate changed (e.g. after reconnect): re-render for playback.
         let stale_rate = self.rendered.as_ref().is_some_and(|r| {
             r.generation == self.generation && (r.sample_rate != self.player.sample_rate() || r.render_rate != self.export_settings.sample_rate)
         });
@@ -701,7 +678,7 @@ impl SfxcApp {
                 actions.push(Action::DuplicateCurrent);
             }
             if typing {
-                return; // text fields keep their own undo, space and letters
+                return;
             }
             if i.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z) {
                 actions.push(Action::Redo);
@@ -779,7 +756,6 @@ impl SfxcApp {
         let p = theme::palette_of(ctx);
         egui::Area::new(egui::Id::new("toasts")).anchor(egui::Align2::RIGHT_BOTTOM, [-16.0, -16.0]).show(ctx, |ui| {
             for t in &self.toasts {
-                // Fade in quickly, fade out over the last 400 ms.
                 let age = t.at.elapsed().as_secs_f32();
                 let left = TOAST_TIME.as_secs_f32() - age;
                 ui.set_opacity((age / 0.15).min(1.0).min(left / 0.4).clamp(0.0, 1.0));
@@ -997,8 +973,6 @@ mod tests {
     }
 }
 
-/// Renders the editor headlessly with the pointer swept over a grid, so proximity effects run
-/// near every control. Catches NaN or degenerate rects in custom drawing code.
 #[cfg(test)]
 mod render_smoke {
     use super::*;
@@ -1076,7 +1050,6 @@ mod render_smoke {
         assert!(!saved.starts_with("generate,"), "the first card should have moved down, got {saved}");
     }
 
-    /// Effects are cards in a horizontal strip; dragging one by its handle onto another reorders the chain.
     #[test]
     fn dragging_an_effect_card_reorders_the_chain() {
         use eframe::egui::PointerButton;
@@ -1113,7 +1086,6 @@ mod render_smoke {
         assert_eq!(ids, vec![2, 3, 1], "first card dropped on the third");
     }
 
-    /// Clicking an effect card's title folds it, like the sound-settings cards.
     #[test]
     fn clicking_an_effect_title_folds_the_card() {
         use sfxc_core::patch::{Effect, EffectKind};
@@ -1133,7 +1105,6 @@ mod render_smoke {
         widgets::test_support::take_grips();
         frame(&ctx, &mut cur, &mut t, vec![], &mut actions);
         let grip = *widgets::test_support::take_grips().last().expect("effect handle");
-        // The name runs down the rail under the handle and the caret.
         let title = grip.center() + vec2(0.0, 110.0);
         let button = |pressed| Event::PointerButton { pos: title, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
         frame(&ctx, &mut cur, &mut t, vec![Event::PointerMoved(title)], &mut actions);
@@ -1144,7 +1115,6 @@ mod render_smoke {
         assert_eq!(open, Some(false), "title click should fold the card");
     }
 
-    /// Volume lives in the Settings popup: dragging its slider sets and saves the volume.
     #[test]
     fn settings_popup_has_a_volume_slider_that_sets_the_volume() {
         use eframe::egui::PointerButton;

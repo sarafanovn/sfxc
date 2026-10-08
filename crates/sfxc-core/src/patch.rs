@@ -1,6 +1,3 @@
-//! The complete, serializable description of one sound. Audio is never stored;
-//! it is rendered from this on demand.
-
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 
@@ -13,7 +10,6 @@ pub const MAX_ARP_STEPS: usize = 8;
 
 pub type Range = (f32, f32);
 
-/// Valid ranges for every continuous parameter. Shared by clamping, generators and UI sliders.
 pub mod ranges {
     use super::Range;
     pub const UNIT: Range = (0.0, 1.0);
@@ -48,7 +44,6 @@ pub mod ranges {
     pub const MAKEUP_DB: Range = (0.0, 24.0);
 }
 
-/// Clamps into `r`; NaN/inf become the lower bound.
 pub fn clamp_f(v: &mut f32, r: Range) {
     *v = if v.is_finite() { v.clamp(r.0, r.1) } else { r.0 };
 }
@@ -92,7 +87,6 @@ impl NoiseKind {
     }
 }
 
-/// Operator routing. Operator 4 (index 3) is always a carrier.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FmAlgorithm {
     Serial,
@@ -119,7 +113,6 @@ impl FmAlgorithm {
 #[serde(default)]
 pub struct FmOperator {
     pub ratio: f32,
-    /// Cents.
     pub detune: f32,
     pub level: f32,
     pub attack: f32,
@@ -201,21 +194,13 @@ impl Source {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Pitch {
-    /// Hz.
     pub base_freq: f32,
-    /// Octaves per second.
     pub slide: f32,
-    /// Octaves per second².
     pub delta_slide: f32,
-    /// Semitones.
     pub vibrato_depth: f32,
-    /// Hz.
     pub vibrato_rate: f32,
-    /// Semitone offsets cycled during the sound.
     pub arp_steps: Vec<i8>,
-    /// Seconds per arpeggio step.
     pub arp_speed: f32,
-    /// When false, `arp_steps` are kept but not played.
     pub arp_enabled: bool,
 }
 
@@ -234,7 +219,6 @@ impl Default for Pitch {
     }
 }
 
-/// One-shot envelope (no note-off). All times in seconds.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Envelope {
@@ -243,7 +227,6 @@ pub struct Envelope {
     pub sustain_level: f32,
     pub sustain_time: f32,
     pub release: f32,
-    /// Extra level at the start of sustain that fades out over the sustain time.
     pub punch: f32,
 }
 
@@ -263,7 +246,6 @@ pub struct Layer {
     pub gain: f32,
     /// Stored for future stereo output; v1 renders mono.
     pub pan: f32,
-    /// Per-layer chain; not exposed in the v1 UI.
     pub effects: Vec<Effect>,
 }
 
@@ -358,7 +340,6 @@ pub enum EffectKind {
 }
 
 impl EffectKind {
-    /// One default instance of every effect, in menu order.
     pub fn all_defaults() -> Vec<EffectKind> {
         vec![
             EffectKind::Bitcrusher { bits: 6.0, downsample: 4.0, mix: 1.0 },
@@ -371,7 +352,6 @@ impl EffectKind {
         ]
     }
 
-    /// The default instance of the same variant (used for double-click reset).
     pub fn defaults(&self) -> EffectKind {
         let name = self.name();
         EffectKind::all_defaults()
@@ -392,7 +372,6 @@ impl EffectKind {
         }
     }
 
-    /// Effects that keep sounding after the input stops.
     pub fn has_tail(&self) -> bool {
         matches!(self, EffectKind::Delay { .. } | EffectKind::Reverb { .. } | EffectKind::Flanger { .. })
     }
@@ -507,7 +486,6 @@ impl SoundPatch {
         serde_json::to_string(self).expect("SoundPatch always serializes")
     }
 
-    /// Parses, migrates older schemas step by step, and clamps every value.
     pub fn from_json(s: &str) -> Result<Self> {
         let mut value: serde_json::Value = serde_json::from_str(s)?;
         let version = value.get("schema_version").and_then(|v| v.as_u64()).unwrap_or(1) as u32;
@@ -527,8 +505,6 @@ impl SoundPatch {
 /// `SCHEMA_VERSION` and add a step here: `if from < 2 { v1_to_v2(value) }`.
 fn migrate(_value: &mut serde_json::Value, _from: u32) {}
 
-/// Patches saved before the equalizer have a per-layer `filter`. It is dropped; a low-, high- or
-/// band-pass becomes a similar equalizer curve unless the layer already has an `eq`.
 fn filter_to_eq(value: &mut serde_json::Value) {
     let Some(layers) = value.get_mut("layers").and_then(|l| l.as_array_mut()) else { return };
     for layer in layers {
@@ -587,7 +563,6 @@ mod tests {
         assert_eq!(p.layers[0].eq.gains, [0.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
     }
 
-    /// Patches saved before the equalizer carried a `filter`; it becomes a similar curve.
     #[test]
     fn legacy_filter_becomes_an_equalizer_curve() {
         let mut v: serde_json::Value = serde_json::from_str(&SoundPatch::default().to_json()).unwrap();

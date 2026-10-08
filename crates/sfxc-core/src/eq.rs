@@ -1,23 +1,16 @@
-//! Six-band graphic equalizer: a low shelf, four peaking bands and a high shelf (RBJ biquads).
-
 use std::f32::consts::{PI, SQRT_2};
 
 use serde::{Deserialize, Serialize};
 
 pub const BANDS: usize = 6;
-/// Centre (or corner) frequency of each band in Hz. The first band is a low shelf, the last a high shelf.
 pub const FREQS: [f32; BANDS] = [60.0, 150.0, 400.0, 1000.0, 2400.0, 15_000.0];
-/// Largest boost or cut of a band, in dB.
 pub const RANGE_DB: f32 = 12.0;
-/// Width of the peaking bands.
 const Q: f32 = 1.0;
 
-/// Per-layer equalizer settings. Flat gains leave the sound untouched.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Equalizer {
     pub enabled: bool,
-    /// dB per band, `-RANGE_DB..=RANGE_DB`.
     pub gains: [f32; BANDS],
 }
 
@@ -27,25 +20,21 @@ impl Default for Equalizer {
     }
 }
 
-/// Gain in dB for a band at `x` octaves "inside" the cut, easing in from 0 to the full range.
 fn ramp(x: f32, width_octaves: f32) -> f32 {
     -RANGE_DB * (x / width_octaves + 0.2).clamp(0.0, 1.0)
 }
 
 impl Equalizer {
-    /// A curve that roughly imitates a low-pass at `cutoff` Hz.
     pub fn lowpass(cutoff: f32) -> Self {
         let cutoff = cutoff.max(20.0);
         Self { enabled: true, gains: FREQS.map(|f| ramp((f / cutoff).log2(), 1.5)) }
     }
 
-    /// A curve that roughly imitates a high-pass at `cutoff` Hz.
     pub fn highpass(cutoff: f32) -> Self {
         let cutoff = cutoff.max(20.0);
         Self { enabled: true, gains: FREQS.map(|f| ramp((cutoff / f).log2(), 1.5)) }
     }
 
-    /// A curve that roughly imitates a band-pass around `centre` Hz.
     pub fn bandpass(centre: f32) -> Self {
         let centre = centre.max(20.0);
         Self { enabled: true, gains: FREQS.map(|f| -RANGE_DB * ((f / centre).log2().abs() / 2.0).clamp(0.0, 1.0)) }
@@ -58,7 +47,6 @@ impl Equalizer {
     }
 }
 
-/// Ready-made curves, in dB per band. The first one is always flat.
 pub const PRESETS: [(&str, [f32; BANDS]); 9] = [
     ("Flat", [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
     ("Classic", [2.0, 1.5, -1.0, -0.5, -0.5, 2.0]),
@@ -71,7 +59,6 @@ pub const PRESETS: [(&str, [f32; BANDS]); 9] = [
     ("Thin", [-12.0, -8.0, -3.0, 0.0, 1.0, 2.0]),
 ];
 
-/// Name of the preset whose curve equals `gains`, if any.
 pub fn preset_name(gains: &[f32; BANDS]) -> Option<&'static str> {
     PRESETS.iter().find(|(_, g)| g.iter().zip(gains).all(|(a, b)| (a - b).abs() < 0.05)).map(|(n, _)| *n)
 }
@@ -95,7 +82,6 @@ enum Shape {
 }
 
 impl Biquad {
-    /// RBJ audio-EQ-cookbook coefficients, normalised by `a0`.
     fn new(shape: Shape, freq: f32, gain_db: f32, sample_rate: f32) -> Self {
         let a = 10f32.powf(gain_db / 40.0);
         let w0 = 2.0 * PI * freq.min(sample_rate * 0.45) / sample_rate;
@@ -132,7 +118,6 @@ impl Biquad {
         Self { b0: b0 / a0, b1: b1 / a0, b2: b2 / a0, a1: a1 / a0, a2: a2 / a0, z1: 0.0, z2: 0.0 }
     }
 
-    /// Transposed direct form II.
     fn process(&mut self, x: f32) -> f32 {
         let y = self.b0 * x + self.z1;
         self.z1 = self.b1 * x - self.a1 * y + self.z2;
@@ -141,7 +126,6 @@ impl Biquad {
     }
 }
 
-/// The running filter for one layer. Bands set to (almost) 0 dB are skipped, so a flat curve is free.
 pub struct EqFilter {
     stages: Vec<Biquad>,
 }
@@ -185,7 +169,6 @@ mod tests {
         (x.iter().map(|v| v * v).sum::<f32>() / x.len() as f32).sqrt()
     }
 
-    /// RMS gain of the equalizer for a sine, measured after the filter has settled.
     fn gain_at(eq: &Equalizer, freq: f32) -> f32 {
         let input = sine(freq, 48_000);
         let mut f = EqFilter::new(eq, SR);

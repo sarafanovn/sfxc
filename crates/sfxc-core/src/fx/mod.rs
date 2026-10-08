@@ -1,6 +1,3 @@
-//! Audio effects. Each effect is a small struct with `process(x) -> y`; `FxChain`
-//! runs the enabled ones in list order.
-
 mod bitcrusher;
 mod compressor;
 mod delay;
@@ -19,12 +16,10 @@ pub use reverb::Reverb;
 
 use crate::patch::{Effect, EffectKind};
 
-/// Equal-ish loudness wet/dry mix shared by the modulation effects.
 pub(crate) fn mix(dry: f32, wet: f32, amount: f32) -> f32 {
     dry * (1.0 - amount) + wet * amount
 }
 
-/// Next index of a circular buffer of length `len`.
 #[inline]
 pub(crate) fn wrap_next(i: usize, len: usize) -> usize {
     let n = i + 1;

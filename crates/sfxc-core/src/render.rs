@@ -1,5 +1,3 @@
-//! Offline renderer: patch → mono f32 samples at the requested sample rate.
-
 use crate::env;
 use crate::eq::EqFilter;
 use crate::fx::FxChain;
@@ -8,7 +6,6 @@ use crate::osc::Oscillator;
 use crate::patch::{Layer, Mode, SoundPatch, MAX_SECONDS};
 use crate::pitch;
 
-/// Extra time rendered after the envelopes end when a tail effect is enabled.
 pub const TAIL_SECONDS: f32 = 4.0;
 /// −80 dB: anything quieter at the end is trimmed.
 pub const SILENCE: f32 = 1e-4;
@@ -19,7 +16,6 @@ pub fn render(patch: &SoundPatch, sample_rate: u32) -> Vec<f32> {
     render_cancellable(patch, sample_rate, &|| false).expect("render without cancellation always finishes")
 }
 
-/// Returns `None` as soon as `cancelled` reports true.
 pub fn render_cancellable(patch: &SoundPatch, sample_rate: u32, cancelled: &(dyn Fn() -> bool + Sync)) -> Option<Vec<f32>> {
     let mut patch = patch.clone();
     patch.clamp();
@@ -103,7 +99,6 @@ fn render_layer(patch: &SoundPatch, layer: &Layer, index: usize, sr: f32, out: &
     true
 }
 
-/// Drops trailing samples quieter than `threshold`.
 pub fn trim_tail(samples: &mut Vec<f32>, threshold: f32) {
     let end = samples.iter().rposition(|s| s.abs() >= threshold).map_or(0, |i| i + 1);
     samples.truncate(end);

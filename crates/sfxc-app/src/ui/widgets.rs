@@ -1,5 +1,3 @@
-//! Shared components drawn with the theme tokens.
-
 use eframe::egui::{
     self, Align, Align2, Color32, CursorIcon, FontId, Frame, Layout, Margin, Pos2, Rect, Response, RichText,
     Sense, Shadow, Shape, Stroke, TextStyle, Ui, Vec2, WidgetText,
@@ -15,10 +13,8 @@ use super::theme::{self, palette, Palette, R_CARD, R_CONTROL};
 const LABEL_W: f32 = 104.0;
 const VALUE_W: f32 = 92.0;
 const ROW_GAP: f32 = 10.0;
-/// Vertical space after a card, on top of the item spacing.
 const CARD_GAP: f32 = 14.0;
 
-/// Muted, left-aligned label in the fixed first column of parameter rows.
 pub fn row_label(ui: &mut Ui, label: &str) {
     let p = palette(ui);
     let (rect, _) = ui.allocate_exact_size(Vec2::new(LABEL_W, ui.spacing().interact_size.y), Sense::hover());
@@ -26,12 +22,10 @@ pub fn row_label(ui: &mut Ui, label: &str) {
     ui.painter().galley(Pos2::new(rect.left(), rect.center().y - galley.size().y / 2.0), galley, p.muted);
 }
 
-/// Parameter row: label, slider, editable value. Double-click the slider to reset.
 pub fn param(ui: &mut Ui, label: &str, v: &mut f32, range: Range, default: f32, suffix: &str, log: bool) -> Response {
     param_row(ui, label, v, range.0, range.1, default, suffix, log)
 }
 
-/// Rotary variant of [`param`] for compact layouts (effect cards).
 pub fn knob(ui: &mut Ui, label: &str, v: &mut f32, range: Range, default: f32, suffix: &str, log: bool) -> Response {
     controls::knob(ui, label, v, range.0, range.1, default, suffix, log)
 }
@@ -40,7 +34,6 @@ pub fn knob_num<N: Numeric>(ui: &mut Ui, label: &str, v: &mut N, lo: N, hi: N, d
     controls::knob(ui, label, v, lo, hi, default, suffix, false)
 }
 
-/// Digits after the decimal point, by the size of the range, so a column of values lines up.
 fn decimals_for(lo: f64, hi: f64, integral: bool) -> usize {
     let span = (hi - lo).abs();
     if integral || span >= 1000.0 {
@@ -54,7 +47,6 @@ fn decimals_for(lo: f64, hi: f64, integral: bool) -> usize {
     }
 }
 
-/// Label, track and value sit in fixed columns of one allocated row, so nothing can widen the row.
 #[allow(clippy::too_many_arguments)]
 fn param_row<N: Numeric>(ui: &mut Ui, label: &str, v: &mut N, lo: N, hi: N, default: N, suffix: &str, log: bool) -> Response {
     let p = palette(ui);
@@ -94,7 +86,6 @@ fn param_row<N: Numeric>(ui: &mut Ui, label: &str, v: &mut N, lo: N, hi: N, defa
     resp.union(dv)
 }
 
-/// Dropdown in the same material as the other fields: recessed well, phosphor caret.
 pub fn select<R>(ui: &mut Ui, id_salt: &str, selected: impl Into<egui::WidgetText>, add: impl FnOnce(&mut Ui) -> R) -> egui::InnerResponse<Option<R>> {
     let p = palette(ui);
     ui.scope(|ui| {
@@ -116,7 +107,6 @@ pub fn select<R>(ui: &mut Ui, id_salt: &str, selected: impl Into<egui::WidgetTex
     .inner
 }
 
-/// Fixed-width dropdown over a small set of values. Returns true when the choice changed.
 pub fn dropdown<T: PartialEq + Copy>(ui: &mut Ui, id_salt: &str, width: f32, value: &mut T, options: &[(T, &str)]) -> bool {
     let before = *value;
     let current = options.iter().find(|(v, _)| *v == *value).map_or("—", |(_, l)| *l);
@@ -130,7 +120,6 @@ pub fn dropdown<T: PartialEq + Copy>(ui: &mut Ui, id_salt: &str, width: f32, val
     *value != before
 }
 
-/// Short muted label followed by its control, kept together when a row wraps.
 pub fn field<R>(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui) -> R) -> R {
     let p = palette(ui);
     ui.horizontal(|ui| {
@@ -149,12 +138,10 @@ pub enum Kind {
     Danger,
 }
 
-/// Button with optional leading icon. Flat label that lifts on hover and sinks on press; `kind` only picks the label color.
 pub fn button(ui: &mut Ui, kind: Kind, icon: Option<&str>, text: &str) -> Response {
     button_min_width(ui, kind, icon, text, 0.0)
 }
 
-/// Natural width of a [`button`] with this label, for sizing a group of buttons alike.
 pub fn button_width(ui: &Ui, icon: Option<&str>, text: &str) -> f32 {
     let label = match icon {
         Some(i) if text.is_empty() => i.to_string(),
@@ -166,7 +153,6 @@ pub fn button_width(ui: &Ui, icon: Option<&str>, text: &str) -> f32 {
     (galley.size().x + pad * 2.0).max(36.0)
 }
 
-/// Like [`button`], at least `min_width` wide with the label centered.
 pub fn button_min_width(ui: &mut Ui, kind: Kind, icon: Option<&str>, text: &str, min_width: f32) -> Response {
     let p = palette(ui);
     let fg = |hovered: bool| match kind {
@@ -189,7 +175,6 @@ pub fn button_min_width(ui: &mut Ui, kind: Kind, icon: Option<&str>, text: &str,
     if ui.is_rect_visible(rect) {
         let m = Motion::of(ui, &resp);
         let painter = ui.painter();
-        // Flat text at rest; the button lifts off the surface on hover and sinks on press.
         if m.hover > 0.0 || m.press > 0.0 {
             material::raised(painter, rect, R_CONTROL as f32, &p, &m);
         }
@@ -200,12 +185,10 @@ pub fn button_min_width(ui: &mut Ui, kind: Kind, icon: Option<&str>, text: &str,
     if ui.is_enabled() { resp.on_hover_cursor(CursorIcon::PointingHand) } else { resp }
 }
 
-/// Square icon-only ghost button with a tooltip.
 pub fn icon_button(ui: &mut Ui, icon: &str, tooltip: &str) -> Response {
     button(ui, Kind::Ghost, Some(icon), "").on_hover_text(tooltip)
 }
 
-/// Segmented control. Returns true when the selection changed.
 pub fn segmented<T: PartialEq + Copy>(ui: &mut Ui, value: &mut T, options: &[(T, &str)]) -> bool {
     let p = palette(ui);
     let font = FontId::proportional(12.5);
@@ -239,7 +222,6 @@ pub fn segmented<T: PartialEq + Copy>(ui: &mut Ui, value: &mut T, options: &[(T,
     changed
 }
 
-/// iOS-style switch with an optional label to its right.
 pub fn toggle(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
     let p = palette(ui);
     let track = Vec2::new(30.0, 18.0);
@@ -268,7 +250,6 @@ pub fn toggle(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
     resp.on_hover_cursor(CursorIcon::PointingHand)
 }
 
-/// Square power button: sunken and dim when off, raised with an accent icon when on.
 pub fn power_toggle(ui: &mut Ui, on: &mut bool) -> Response {
     let p = palette(ui);
     let (rect, mut resp) = ui.allocate_exact_size(Vec2::splat(28.0), Sense::click());
@@ -293,12 +274,10 @@ pub fn card_frame(_ui: &Ui) -> Frame {
     Frame::new().corner_radius(R_CARD).inner_margin(Margin::same(14))
 }
 
-/// Frame content on a raised card. Shadows are painted under the content after layout.
 pub fn material_card<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     material_card_response(ui, add).inner
 }
 
-/// Like [`material_card`], but also returns the card's response (its rect, for drop targets).
 pub fn material_card_response<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> egui::InnerResponse<R> {
     let p = palette(ui);
     let under = ui.painter().add(Shape::Noop);
@@ -316,7 +295,6 @@ pub fn material_card_response<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) ->
     inner
 }
 
-/// Lets tests find the drag handles that were drawn in the last frame.
 #[cfg(test)]
 pub mod test_support {
     use std::cell::RefCell;
@@ -332,7 +310,6 @@ pub mod test_support {
     }
 }
 
-/// Where a card sits in a reorderable group: `group` names the list, `index` is its position.
 #[derive(Clone, Copy)]
 pub struct Grip<'a> {
     pub group: &'a str,
@@ -345,9 +322,6 @@ struct DragPayload {
     index: usize,
 }
 
-/// Collapsible card; open state is remembered per `key`. `header` adds widgets at the right of the title.
-/// With a `grip` the card has a drag handle and can be dropped onto other cards of the same group;
-/// the result is `(from, to)` when something was dropped on this card.
 pub fn section(
     ui: &mut Ui,
     key: &str,
@@ -390,7 +364,6 @@ pub fn section(
     drop_zone(ui, rect, g, Axis::Vertical, half_gap)
 }
 
-/// Drag handle of a reorderable card. Dragging it carries the card's place in its group.
 pub fn grip_handle(ui: &mut Ui, grip: Grip, key: &str) -> Response {
     let p = palette(ui);
     let payload = DragPayload { group: egui::Id::new(grip.group), index: grip.index };
@@ -411,9 +384,6 @@ pub enum Axis {
     Horizontal,
 }
 
-/// Drop target for the card in `rect`, while a card of the same group is dragged. The zone includes
-/// `half_gap` on each side along `axis`, so a drop between two cards still lands. Returns
-/// `(from, to)` on release; otherwise draws a line on the side where the dragged card will land.
 pub fn drop_zone(ui: &mut Ui, rect: Rect, grip: Grip, axis: Axis, half_gap: f32) -> Option<(usize, usize)> {
     let p = palette(ui);
     let group = egui::Id::new(grip.group);
@@ -428,7 +398,6 @@ pub fn drop_zone(ui: &mut Ui, rect: Rect, grip: Grip, axis: Axis, half_gap: f32)
     if ui.input(|i| i.pointer.any_released()) {
         return Some((payload.index, grip.index));
     }
-    // Dropping moves the dragged card to this slot, so the line goes on the side it will land.
     let after = payload.index < grip.index;
     let stroke = Stroke::new(2.0, p.accent);
     match axis {
@@ -452,7 +421,6 @@ pub fn panel_header(ui: &mut Ui, title: &str, trailing: impl FnOnce(&mut Ui)) {
     });
 }
 
-/// Small rounded label. `tone` picks the colors.
 pub fn badge(ui: &mut Ui, text: &str, tone: Tone) -> Response {
     let p = palette(ui);
     let (fg, bg) = tone.colors(&p);
@@ -482,7 +450,6 @@ impl Tone {
     }
 }
 
-/// Inline notice with an icon. Returns true when its close button was clicked.
 pub fn banner(ui: &mut Ui, tone: Tone, icon_glyph: &str, text: &str, closable: bool) -> bool {
     let p = palette(ui);
     let (fg, bg) = tone.colors(&p);
@@ -502,7 +469,6 @@ pub fn banner(ui: &mut Ui, tone: Tone, icon_glyph: &str, text: &str, closable: b
     closed
 }
 
-/// Centered icon, title and hint for panels with nothing to show.
 pub fn empty_state(ui: &mut Ui, glyph: &str, title: &str, body: &str, add: impl FnOnce(&mut Ui)) {
     let p = palette(ui);
     ui.vertical_centered(|ui| {
@@ -518,7 +484,6 @@ pub fn empty_state(ui: &mut Ui, glyph: &str, title: &str, body: &str, add: impl 
     });
 }
 
-/// Search input with a magnifier, drawn as one control.
 pub fn search_field(ui: &mut Ui, text: &mut String, hint: &str) -> Response {
     let p = palette(ui);
     Frame::new()
@@ -557,12 +522,10 @@ impl WithChanged for Response {
     }
 }
 
-/// Text in the theme's muted color at a small size.
 pub fn hint(ui: &Ui, text: impl Into<String>) -> WidgetText {
     RichText::new(text).color(palette(ui).faint).size(11.5).into()
 }
 
-/// Large round play button.
 pub fn play_button(ui: &mut Ui, playing: bool) -> Response {
     let p = palette(ui);
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(48.0), Sense::click());
@@ -576,9 +539,6 @@ pub fn play_button(ui: &mut Ui, playing: bool) -> Response {
     resp.on_hover_cursor(CursorIcon::PointingHand).on_hover_text(if playing { "Stop (Space)" } else { "Play (Space)" })
 }
 
-/// Filled waveform with a playhead. `progress` is the played fraction while audio runs.
-/// `axis_secs` fixes the length of the time axis (a fixed export length): the sound is cut or padded with
-/// silence to it, and the time label shows that length. `None` shows the sound's own length.
 pub fn waveform(ui: &mut Ui, rendered: Option<(&[f32], u32)>, generation: u64, progress: Option<f32>, height: f32, axis_secs: Option<f32>) {
     let p = palette(ui);
     let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), height), Sense::hover());
@@ -621,7 +581,6 @@ pub fn waveform(ui: &mut Ui, rendered: Option<(&[f32], u32)>, generation: u64, p
 
 type PeakKey = (u64, usize, usize, u32);
 
-/// Min/max of each column, cached until the render or the layout changes.
 fn column_peaks(ui: &Ui, samples: &[f32], generation: u64, cols: usize, per: f32) -> std::sync::Arc<[(f32, f32)]> {
     let key: PeakKey = (generation, samples.len(), cols, per.to_bits());
     let id = ui.id().with("waveform_peaks");
@@ -641,7 +600,6 @@ fn column_peaks(ui: &Ui, samples: &[f32], generation: u64, cols: usize, per: f32
     peaks
 }
 
-/// Human-readable age for timestamps in lists.
 pub fn age(secs: i64) -> String {
     match secs {
         s if s < 60 => "just now".into(),
@@ -651,7 +609,6 @@ pub fn age(secs: i64) -> String {
     }
 }
 
-/// Dialog body shared by the modals: title, content, right-aligned actions.
 pub fn dialog<R>(ui: &mut Ui, title: &str, body: impl FnOnce(&mut Ui), actions: impl FnOnce(&mut Ui) -> R) -> R {
     ui.set_width(440.0);
     ui.spacing_mut().item_spacing = Vec2::new(12.0, 10.0);
@@ -662,7 +619,6 @@ pub fn dialog<R>(ui: &mut Ui, title: &str, body: impl FnOnce(&mut Ui), actions: 
     ui.with_layout(Layout::right_to_left(Align::Center), actions).inner
 }
 
-/// Sunken area that holds a list; content is inset so row shadows stay inside.
 pub fn list_well(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
     let p = palette(ui);
     let rect = ui.available_rect_before_wrap();

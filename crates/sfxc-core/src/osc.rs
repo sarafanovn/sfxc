@@ -1,14 +1,10 @@
-//! Oscillators. One `Oscillator` renders one layer's source sample by sample.
-
 use std::f32::consts::TAU;
 
 use crate::patch::{FmAlgorithm, FmOperator, Mode, NoiseKind, Source};
 use crate::rng::Rng;
 
-/// Noise is clocked at `freq * NOISE_CLOCK_MULT`, so pitch controls noise colour.
 pub const NOISE_CLOCK_MULT: f32 = 32.0;
 
-/// PolyBLEP residual for a discontinuity at phase 0. `t` is phase in [0,1), `dt` is freq/sr.
 pub fn poly_blep(t: f32, dt: f32) -> f32 {
     if t < dt {
         let x = t / dt;
@@ -21,14 +17,12 @@ pub fn poly_blep(t: f32, dt: f32) -> f32 {
     }
 }
 
-/// One step of the NES 15-bit noise LFSR. `short` selects the 93-step mode.
 pub fn lfsr_step(state: u16, short: bool) -> u16 {
     let tap = if short { 6 } else { 1 };
     let bit = (state ^ (state >> tap)) & 1;
     (state >> 1) | (bit << 14)
 }
 
-/// Envelope of one FM operator: linear attack, linear decay to sustain, then hold.
 pub fn fm_op_env(op: &FmOperator, t: f32) -> f32 {
     if t < op.attack {
         return t / op.attack;
@@ -76,7 +70,6 @@ impl Oscillator {
         }
     }
 
-    /// `freq` in Hz (caller keeps it below Nyquist), `t` seconds since sound start.
     pub fn next(&mut self, freq: f32, t: f32) -> f32 {
         let dt = freq / self.sample_rate;
         let p = self.phase;
@@ -141,7 +134,6 @@ impl Oscillator {
     fn fm(&mut self, algorithm: FmAlgorithm, feedback: f32, ops: &[FmOperator; 4], dt: f32, t: f32) -> f32 {
         let lvl: [f32; 4] = std::array::from_fn(|i| ops[i].level * fm_op_env(&ops[i], t));
         let ph = self.fm_phase;
-        // Modulation is a phase offset in cycles.
         let op = |i: usize, m: f32| (TAU * (ph[i] + m)).sin() * lvl[i];
         let fb = feedback * 0.5 * (self.fm_prev[0] + self.fm_prev[1]);
         let o0 = op(0, fb);

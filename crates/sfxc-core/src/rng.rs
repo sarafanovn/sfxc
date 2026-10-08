@@ -17,17 +17,14 @@ impl Rng {
         z ^ (z >> 31)
     }
 
-    /// Uniform in [0, 1).
     pub fn f32(&mut self) -> f32 {
         (self.next_u64() >> 40) as f32 / (1u64 << 24) as f32
     }
 
-    /// Uniform in [lo, hi).
     pub fn range(&mut self, lo: f32, hi: f32) -> f32 {
         lo + (hi - lo) * self.f32()
     }
 
-    /// Uniform in [-1, 1).
     pub fn bipolar(&mut self) -> f32 {
         self.f32() * 2.0 - 1.0
     }

@@ -1,5 +1,3 @@
-//! One-shot amplitude envelope: attack → decay → sustain (with punch) → release.
-
 use crate::patch::Envelope;
 
 pub fn length(e: &Envelope) -> f32 {
