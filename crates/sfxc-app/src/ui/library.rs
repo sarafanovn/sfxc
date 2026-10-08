@@ -29,7 +29,7 @@ pub fn show(
     search: &mut String,
     current: Option<i64>,
     now: i64,
-    prefs: &Prefs,
+    prefs: &mut Prefs,
     actions: &mut Vec<Action>,
 ) {
     widgets::panel_header(ui, "Library", |ui| {
@@ -147,18 +147,28 @@ fn one_line(ui: &egui::Ui, text: &str, size: f32, color: egui::Color32, width: f
     ui.painter().layout_job(job)
 }
 
-fn settings_button(ui: &mut egui::Ui, prefs: &Prefs, actions: &mut Vec<Action>) {
+/// Content width of the Settings popup, inside its padding.
+const POPUP_W: f32 = 300.0;
+
+/// Flat "Settings" button with a popup for appearance and sound. Returns the button's rect.
+pub fn settings_button(ui: &mut egui::Ui, prefs: &mut Prefs, actions: &mut Vec<Action>) -> egui::Rect {
     let resp = button(ui, Kind::Ghost, Some(icon::GEAR_SIX), "Settings");
+    let frame = egui::Frame::popup(ui.style()).inner_margin(egui::Margin::same(22));
     egui::Popup::from_toggle_button_response(&resp)
         .align(egui::RectAlign::TOP_START)
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-        .width(260.0)
+        .frame(frame)
+        .width(POPUP_W)
         .show(|ui| {
             let p = palette(ui);
-            ui.set_width(260.0);
-            ui.add_space(2.0);
-            ui.label(egui::RichText::new("Appearance").font(FontId::new(13.5, super::theme::semibold())).color(p.text));
-            ui.add_space(8.0);
+            ui.set_width(POPUP_W);
+            ui.spacing_mut().item_spacing = Vec2::new(12.0, 10.0);
+            let heading = |ui: &mut egui::Ui, text: &str| {
+                ui.label(egui::RichText::new(text).font(FontId::new(13.5, super::theme::semibold())).color(p.text));
+            };
+
+            heading(ui, "Appearance");
+            ui.add_space(6.0);
             ui.label(widgets::hint(ui, "Theme"));
             let mut theme = prefs.theme;
             let options: Vec<(ThemeChoice, String)> =
@@ -167,42 +177,53 @@ fn settings_button(ui: &mut egui::Ui, prefs: &Prefs, actions: &mut Vec<Action>) 
             if segmented(ui, &mut theme, &opts) {
                 actions.push(Action::SetTheme(theme));
             }
+            ui.label(widgets::hint(ui, "Auto follows the macOS appearance."));
             ui.add_space(10.0);
+
             ui.label(widgets::hint(ui, "Accent"));
             ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 6.0;
+                ui.spacing_mut().item_spacing.x = 10.0;
                 let dark = ui.visuals().dark_mode;
                 for hue in accent::SWATCHES {
                     let color = super::theme::with_accent(p, hue, dark).accent;
-                    let (rect, r) = ui.allocate_exact_size(Vec2::splat(22.0), Sense::click());
+                    let (rect, r) = ui.allocate_exact_size(Vec2::splat(26.0), Sense::click());
                     let selected = (prefs.accent_hue - hue).abs() < 0.5;
-                    ui.painter().circle_filled(rect.center(), if selected { 10.0 } else { 8.0 }, color);
+                    ui.painter().circle_filled(rect.center(), if selected { 11.0 } else { 9.0 }, color);
                     if selected {
-                        ui.painter().circle_stroke(rect.center(), 10.0, egui::Stroke::new(2.0, p.text));
+                        ui.painter().circle_stroke(rect.center(), 12.0, egui::Stroke::new(2.0, p.text));
                     }
                     if r.on_hover_cursor(CursorIcon::PointingHand).clicked() {
                         actions.push(Action::SetAccent { hue, persist: true });
                     }
                 }
             });
-            ui.add_space(4.0);
-            let mut hue = prefs.accent_hue;
-            let r = super::controls::track(ui, &mut hue, 0.0, 359.0, accent::DEFAULT_HUE, false, 236.0);
-            if r.changed() {
-                actions.push(Action::SetAccent { hue, persist: !r.dragged() });
-            }
-            if r.drag_stopped() {
-                actions.push(Action::SetAccent { hue, persist: true });
-            }
             ui.add_space(10.0);
+
             ui.label(widgets::hint(ui, "Interface size"));
             let mut scale = prefs.scale;
             if segmented(ui, &mut scale, &UI_SCALES) {
                 actions.push(Action::SetScale(scale));
             }
-            ui.add_space(10.0);
-            ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                ui.label(widgets::hint(ui, "Auto follows the macOS appearance."));
+            ui.add_space(14.0);
+
+            heading(ui, "Sound");
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.label(widgets::hint(ui, "Volume"));
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.label(widgets::hint(ui, format!("{:.0}%", prefs.volume * 100.0)));
+                });
             });
+            let mut pos = crate::audio::slider_from_volume(prefs.volume);
+            let default = crate::audio::slider_from_volume(crate::audio::DEFAULT_VOLUME);
+            let r = super::controls::track(ui, &mut pos, 0.0, 1.0, default, false, POPUP_W);
+            prefs.volume = crate::audio::volume_from_slider(pos);
+            if r.drag_stopped() || (r.changed() && !r.dragged()) {
+                actions.push(Action::SaveVolume);
+            }
+            ui.label(widgets::hint(ui, "Playback only. A sound's own level is Gain."));
+            #[cfg(test)]
+            ui.data_mut(|d| d.insert_temp(egui::Id::new("volume_track"), r.rect));
         });
+    resp.rect
 }

@@ -1,4 +1,4 @@
-use eframe::egui::{self, Align, FontId, Frame, Id, Layout, Margin, Rect, RichText, Ui};
+use eframe::egui::{self, Align, FontId, Frame, Id, Layout, Margin, RichText, Ui};
 use egui_phosphor::regular as icon;
 use sfxc_core::generators::Category;
 use sfxc_core::mode::{describe_mapping, map_source_to_mode, NES_DUTIES};
@@ -76,45 +76,6 @@ pub fn show(
 
         });
     });
-}
-
-/// Volume button in the style of the library's Settings button: a flat button that opens a popup with
-/// the playback-volume slider. Returns the button's rect.
-pub fn volume_button(ui: &mut Ui, volume: &mut f32, actions: &mut Vec<Action>) -> Rect {
-    let glyph = match *volume {
-        v if v <= 0.001 => icon::SPEAKER_X,
-        v if v < 0.35 => icon::SPEAKER_LOW,
-        _ => icon::SPEAKER_HIGH,
-    };
-    let resp = button(ui, Kind::Ghost, Some(glyph), "Volume");
-    egui::Popup::from_toggle_button_response(&resp)
-        .align(egui::RectAlign::TOP_START)
-        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
-        .width(260.0)
-        .show(|ui| {
-            let p = palette(ui);
-            ui.set_width(260.0);
-            ui.add_space(2.0);
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("Volume").font(FontId::new(13.5, theme::semibold())).color(p.text));
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.label(RichText::new(format!("{:.0}%", *volume * 100.0)).color(p.muted).size(12.5));
-                });
-            });
-            ui.add_space(8.0);
-            let mut pos = crate::audio::slider_from_volume(*volume);
-            let default = crate::audio::slider_from_volume(crate::audio::DEFAULT_VOLUME);
-            let r = controls::track(ui, &mut pos, 0.0, 1.0, default, false, 236.0);
-            *volume = crate::audio::volume_from_slider(pos);
-            if r.drag_stopped() || (r.changed() && !r.dragged()) {
-                actions.push(Action::SaveVolume);
-            }
-            ui.add_space(4.0);
-            ui.label(super::widgets::hint(ui, "Playback only. A sound's own level is Gain."));
-            #[cfg(test)]
-            ui.data_mut(|d| d.insert_temp(Id::new("volume_track"), r.rect));
-        });
-    resp.rect
 }
 
 fn header(ui: &mut Ui, cur: &mut Current, view: &View, actions: &mut Vec<Action>) {
