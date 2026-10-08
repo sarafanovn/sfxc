@@ -8,7 +8,7 @@ use sfxc_core::patch::{ranges::*, DistortionKind, Effect, EffectKind};
 use super::material::{self, Motion};
 use super::order;
 use super::theme::{self, palette, Palette, R_CARD};
-use super::widgets::{drop_zone, grip_handle, icon_button, knob, knob_num, segmented, toggle, Axis, Grip};
+use super::widgets::{drop_zone, grip_handle, icon_button, knob, knob_num, section, segmented, toggle, Axis, Grip};
 
 const CARD_W: f32 = 212.0;
 const CARD_H: f32 = 300.0;
@@ -40,33 +40,29 @@ pub fn apply(effects: &mut Vec<Effect>, op: Op, next_id: u64) {
     }
 }
 
-pub fn show(ui: &mut egui::Ui, effects: &mut Vec<Effect>, next_id: u64) {
-    let p = palette(ui);
-    ui.label(RichText::new("Effects").text_style(egui::TextStyle::Heading).color(p.text));
-    ui.add_space(6.0);
-
+/// The "Effects" section: a card like the sound-settings ones, holding the strip of effect cards.
+pub fn show(ui: &mut egui::Ui, effects: &mut Vec<Effect>, next_id: u64, grip: Grip) -> Option<(usize, usize)> {
     let mut op = None;
-    egui::ScrollArea::horizontal().id_salt("fx_chain").auto_shrink([false, true]).show(ui, |ui| {
-        // Room around the cards for their soft shadows, which the scroll area would otherwise clip.
-        ui.add_space(16.0);
-        ui.horizontal_top(|ui| {
-            ui.spacing_mut().item_spacing.x = GAP;
-            ui.add_space(GAP);
-            for (i, effect) in effects.iter_mut().enumerate() {
-                if let Some((from, to)) = card(ui, effect, i, &mut op) {
-                    op = Some(Op::Move(from, to));
+    let moved = section(ui, "effects", "Effects", Some(grip), |_| {}, |ui| {
+        egui::ScrollArea::horizontal().id_salt("fx_chain").auto_shrink([false, true]).show(ui, |ui| {
+            ui.horizontal_top(|ui| {
+                ui.spacing_mut().item_spacing.x = GAP;
+                for (i, effect) in effects.iter_mut().enumerate() {
+                    if let Some((from, to)) = card(ui, effect, i, &mut op) {
+                        op = Some(Op::Move(from, to));
+                    }
                 }
-            }
-            let (rect, _) = ui.allocate_exact_size(vec2(CARD_W, CARD_H), Sense::hover());
-            add_card(ui, rect, &mut op);
-            ui.add_space(GAP);
+                let (rect, _) = ui.allocate_exact_size(vec2(CARD_W, CARD_H), Sense::hover());
+                add_card(ui, rect, &mut op);
+            });
+            // Room for the floating scroll bar.
+            ui.add_space(12.0);
         });
-        ui.add_space(28.0);
     });
-
     if let Some(op) = op {
         apply(effects, op, next_id);
     }
+    moved
 }
 
 /// One effect. Returns `(from, to)` when another card was dropped on it.
@@ -79,11 +75,8 @@ fn card(ui: &mut egui::Ui, effect: &mut Effect, i: usize, op: &mut Option<Op>) -
     let head_rect = Rect::from_min_size(rect.min, vec2(CARD_W, HEAD_H));
     let radius = R_CARD as f32;
 
-    if effect.enabled {
-        material::raised(ui.painter(), rect, radius, &Palette { raised: p.surface, ..p }, &Motion::REST);
-    } else {
-        material::recessed(ui.painter(), rect, radius, &p, 0.5);
-    }
+    // Sunken cell inside the Effects card; a bypassed one is flatter.
+    material::recessed(ui.painter(), rect, radius, &p, if effect.enabled { 0.5 } else { 0.15 });
 
     // Left of the header: drag handle, caret and title (clicking either folds the card).
     let mut left = ui.new_child(egui::UiBuilder::new().max_rect(head_rect.shrink2(vec2(10.0, 0.0))).layout(Layout::left_to_right(Align::Center)));
@@ -134,7 +127,11 @@ fn add_card(ui: &mut egui::Ui, rect: Rect, op: &mut Option<Op>) {
     let radius = R_CARD as f32;
 
     // Closed look fades out as the list fades in.
-    material::recessed(ui.painter(), rect, radius, &p, 0.5 * (1.0 - t));
+    // Closed: just an outline, so it reads as an empty slot rather than another effect.
+    if t > 0.01 {
+        material::recessed(ui.painter(), rect, radius, &p, 0.5 * t);
+    }
+    ui.painter().rect_stroke(rect, radius, egui::Stroke::new(1.0, p.faint.gamma_multiply(0.45 * (1.0 - t))), egui::StrokeKind::Inside);
     if t < 0.99 {
         let closed_alpha = 1.0 - t;
         if !open {

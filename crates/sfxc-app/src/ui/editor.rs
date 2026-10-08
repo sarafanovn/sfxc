@@ -12,7 +12,7 @@ use super::widgets::{
 use super::{arp, controls, effects, order, Action, Current};
 
 /// Sound-settings cards, in their default order. The user can drag them into another order.
-pub const SETTINGS: [&str; 5] = ["source", "pitch", "arp", "envelope", "filter"];
+pub const SETTINGS: [&str; 6] = ["source", "pitch", "arp", "envelope", "filter", "effects"];
 pub const SETTINGS_ORDER: &str = "settings_order";
 
 /// Read-only state the editor shows but does not own.
@@ -53,6 +53,7 @@ pub fn show(
             let order_id = Id::new(SETTINGS_ORDER);
             let mut sections: Vec<String> = ui.data(|d| d.get_temp(order_id)).unwrap_or_else(|| order::restore("", &SETTINGS));
             let mode = cur.patch.mode;
+            let next_id = cur.patch.next_effect_id();
             let layer = &mut cur.patch.layers[0];
             let mut moved = None;
             for (i, key) in sections.iter().enumerate() {
@@ -62,6 +63,7 @@ pub fn show(
                     "pitch" => pitch_section(ui, layer, grip),
                     "arp" => arp_section(ui, layer, view, grip),
                     "envelope" => envelope_section(ui, layer, grip),
+                    "effects" => effects::show(ui, &mut cur.patch.master_effects, next_id, grip),
                     _ => filter_section(ui, layer, grip),
                 };
                 moved = moved.or(drop);
@@ -72,9 +74,6 @@ pub fn show(
             }
             ui.data_mut(|d| d.insert_temp(order_id, sections));
 
-            ui.add_space(8.0);
-            let next_id = cur.patch.next_effect_id();
-            effects::show(ui, &mut cur.patch.master_effects, next_id);
         });
     });
 }

@@ -1044,7 +1044,7 @@ mod render_smoke {
         widgets::test_support::take_grips();
         frame(&ctx, &mut cur, &mut t, vec![], &mut actions);
         let grips = widgets::test_support::take_grips();
-        assert!(grips.len() >= 5, "expected a handle per settings card, got {}", grips.len());
+        assert!(grips.len() >= 6, "expected a handle per settings section, got {}", grips.len());
         let start = grips[0].center();
         let press = |pressed| Event::PointerButton { pos: start, button: PointerButton::Primary, pressed, modifiers: Default::default() };
         frame(&ctx, &mut cur, &mut t, vec![Event::PointerMoved(start)], &mut actions);
@@ -1082,8 +1082,8 @@ mod render_smoke {
         widgets::test_support::take_grips();
         frame(&ctx, &mut cur, &mut t, vec![], &mut actions);
         let grips = widgets::test_support::take_grips();
-        assert_eq!(grips.len(), 5 + 3, "five settings cards and three effect cards");
-        let start = grips[5].center();
+        assert_eq!(grips.len(), 6 + 3, "six settings sections (effects among them) and three effect cards");
+        let start = grips[6].center();
         let button = |pos, pressed| Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Default::default() };
         frame(&ctx, &mut cur, &mut t, vec![Event::PointerMoved(start)], &mut actions);
         frame(&ctx, &mut cur, &mut t, vec![button(start, true)], &mut actions);
