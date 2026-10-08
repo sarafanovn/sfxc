@@ -1,5 +1,6 @@
 pub mod rng;
 pub mod patch;
+pub mod patch_edit;
 pub mod osc;
 pub mod pitch;
 pub mod env;
