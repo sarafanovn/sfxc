@@ -10,3 +10,4 @@ pub mod mode;
 pub mod render;
 pub mod generators;
 pub mod export;
+pub mod analyze;
