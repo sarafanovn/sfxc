@@ -39,6 +39,24 @@ pub fn now_secs() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64)
 }
 
+/// Renames sound `id`. Blank names are ignored; if `id` is open, its header is
+/// synced (restored to the stored name on blank input). Returns true if the DB changed.
+fn apply_rename(store: &Store, current: Option<&mut Current>, id: i64, name: &str, now: i64) -> Result<bool> {
+    let name = name.trim();
+    let cur = current.filter(|c| c.id == id);
+    if name.is_empty() {
+        if let Some(cur) = cur {
+            cur.name = store.sound_meta(id)?.0;
+        }
+        return Ok(false);
+    }
+    store.rename_sound(id, name, now)?;
+    if let Some(cur) = cur {
+        cur.name = name.to_string();
+    }
+    Ok(true)
+}
+
 fn fresh_seed() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(1, |d| d.as_nanos() as u64)
 }
@@ -50,7 +68,7 @@ pub enum Action {
     Open(i64),
     DuplicateSound(i64),
     AskDelete(i64),
-    Rename(String),
+    RenameSound(i64, String),
     SetTags(String),
     Play,
     Generate(Category),
@@ -385,16 +403,10 @@ impl SfxcApp {
         }
     }
 
-    fn rename(&mut self, name: String) {
-        let name = name.trim().to_string();
-        let (Some(store), Some(cur)) = (&self.store, self.current.as_mut()) else { return };
-        let r = if name.is_empty() {
-            // Empty names are not allowed: put the stored one back.
-            store.sound_meta(cur.id).map(|(old, _)| cur.name = old)
-        } else {
-            store.rename_sound(cur.id, &name, now_secs())
-        };
-        if self.check(r).is_some() {
+    fn rename_sound(&mut self, id: i64, name: String) {
+        let Some(store) = &self.store else { return };
+        let r = apply_rename(store, self.current.as_mut(), id, &name, now_secs());
+        if self.check(r) == Some(true) {
             self.refresh_list();
         }
     }
@@ -524,7 +536,7 @@ impl SfxcApp {
             Action::Open(id) => self.open_sound(id),
             Action::DuplicateSound(id) => self.duplicate_sound(id),
             Action::AskDelete(id) => self.confirm_delete = Some(id),
-            Action::Rename(name) => self.rename(name),
+            Action::RenameSound(id, name) => self.rename_sound(id, name),
             Action::SetTags(tags) => self.set_tags(tags),
             Action::Play => self.play(),
             Action::Generate(c) => self.generate(c),
@@ -874,5 +886,52 @@ impl eframe::App for SfxcApp {
         }
         self.housekeeping(&ctx);
         self.show_toasts(&ctx);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn current(id: i64, name: &str) -> Current {
+        Current {
+            id,
+            name: name.into(),
+            tags: String::new(),
+            patch: SoundPatch::default(),
+            saved_json: String::new(),
+            changed_at: None,
+        }
+    }
+
+    #[test]
+    fn rename_other_sound_leaves_editor_alone() {
+        let s = Store::open_in_memory().unwrap();
+        let a = s.create_sound("a", &SoundPatch::default(), 1).unwrap();
+        let b = s.create_sound("b", &SoundPatch::default(), 1).unwrap();
+        let mut cur = current(a, "a");
+        assert!(apply_rename(&s, Some(&mut cur), b, "  boom ", 2).unwrap());
+        assert_eq!(s.sound_meta(b).unwrap().0, "boom");
+        assert_eq!(cur.name, "a");
+    }
+
+    #[test]
+    fn rename_current_updates_header() {
+        let s = Store::open_in_memory().unwrap();
+        let a = s.create_sound("a", &SoundPatch::default(), 1).unwrap();
+        let mut cur = current(a, "a");
+        assert!(apply_rename(&s, Some(&mut cur), a, "laser", 2).unwrap());
+        assert_eq!(cur.name, "laser");
+        assert_eq!(s.sound_meta(a).unwrap().0, "laser");
+    }
+
+    #[test]
+    fn rename_ignores_blank_and_restores_header() {
+        let s = Store::open_in_memory().unwrap();
+        let a = s.create_sound("a", &SoundPatch::default(), 1).unwrap();
+        let mut cur = current(a, "   ");
+        assert!(!apply_rename(&s, Some(&mut cur), a, "   ", 2).unwrap());
+        assert_eq!(cur.name, "a");
+        assert_eq!(s.sound_meta(a).unwrap().0, "a");
     }
 }

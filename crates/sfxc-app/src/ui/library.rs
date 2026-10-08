@@ -1,4 +1,4 @@
-use eframe::egui::{self, Align, CursorIcon, FontId, Layout, Pos2, Sense, Vec2};
+use eframe::egui::{self, Align, CursorIcon, FontId, Id, Key, Layout, Pos2, Sense, Vec2};
 use egui_phosphor::regular as icon;
 
 use super::theme::{palette, ThemeChoice, UI_SCALES};
@@ -7,6 +7,11 @@ use super::Action;
 use crate::store::SoundSummary;
 
 const ROW_H: f32 = 46.0;
+
+/// egui temp key holding `(sound id, edited text, just started)` while a row is renamed.
+fn rename_key() -> Id {
+    Id::new("library_rename")
+}
 
 pub struct Prefs {
     pub theme: ThemeChoice,
@@ -72,6 +77,29 @@ fn row(ui: &mut egui::Ui, s: &SoundSummary, selected: bool, now: i64, actions: &
     let resp = resp.on_hover_cursor(CursorIcon::PointingHand);
     row_background(ui, rect, &resp, selected);
     let inner = rect.shrink2(Vec2::new(10.0, 7.0));
+    let editing: Option<(i64, String, bool)> = ui.data(|d| d.get_temp(rename_key()));
+    if let Some((id, mut text, started)) = editing.filter(|(id, ..)| *id == s.id) {
+        let name_rect = egui::Rect::from_min_size(inner.left_top(), Vec2::new(inner.width(), 20.0));
+        let edit_id = Id::new(("library_rename_field", id));
+        let r = ui.put(name_rect, egui::TextEdit::singleline(&mut text).id(edit_id).font(FontId::proportional(13.5)));
+        if started {
+            r.request_focus();
+            if let Some(mut st) = egui::TextEdit::load_state(ui.ctx(), edit_id) {
+                let all = egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(text.chars().count()));
+                st.cursor.set_char_range(Some(all));
+                st.store(ui.ctx(), edit_id);
+            }
+        }
+        if r.lost_focus() {
+            if ui.input(|i| i.key_pressed(Key::Enter)) {
+                actions.push(Action::RenameSound(id, text));
+            }
+            ui.data_mut(|d| d.remove::<(i64, String, bool)>(rename_key()));
+        } else {
+            ui.data_mut(|d| d.insert_temp(rename_key(), (id, text, false)));
+        }
+        return;
+    }
     let name_color = if selected { p.accent_text } else { p.text };
     let painter = ui.painter_at(rect);
     let when = painter.layout_no_wrap(age(now - s.updated_at), FontId::proportional(11.0), p.faint);
@@ -85,7 +113,13 @@ fn row(ui: &mut egui::Ui, s: &SoundSummary, selected: bool, now: i64, actions: &
     if resp.clicked() && !selected {
         actions.push(Action::Open(s.id));
     }
+    if resp.double_clicked() {
+        ui.data_mut(|d| d.insert_temp(rename_key(), (s.id, s.name.clone(), true)));
+    }
     let menu = |ui: &mut egui::Ui| {
+        if ui.button(format!("{}  Rename", icon::PENCIL_SIMPLE)).clicked() {
+            ui.data_mut(|d| d.insert_temp(rename_key(), (s.id, s.name.clone(), true)));
+        }
         if ui.button(format!("{}  Duplicate", icon::COPY)).clicked() {
             actions.push(Action::DuplicateSound(s.id));
         }

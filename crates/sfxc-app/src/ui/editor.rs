@@ -101,7 +101,7 @@ fn header(ui: &mut Ui, cur: &mut Current, view: &View, actions: &mut Vec<Action>
                         .desired_width(ui.available_width() - 12.0),
                 );
                 if name.lost_focus() {
-                    actions.push(Action::Rename(cur.name.clone()));
+                    actions.push(Action::RenameSound(cur.id, cur.name.clone()));
                 }
             });
         });
