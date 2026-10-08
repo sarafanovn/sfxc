@@ -4,3 +4,4 @@ pub mod osc;
 pub mod pitch;
 pub mod env;
 pub mod filter;
+pub mod fx;
