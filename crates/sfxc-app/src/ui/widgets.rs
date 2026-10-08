@@ -31,9 +31,13 @@ pub fn param(ui: &mut Ui, label: &str, v: &mut f32, range: Range, default: f32, 
     param_row(ui, label, v, range.0, range.1, default, suffix, log)
 }
 
-/// Integer (or other numeric) variant of [`param`].
-pub fn param_num<N: Numeric>(ui: &mut Ui, label: &str, v: &mut N, lo: N, hi: N, default: N, suffix: &str) -> Response {
-    param_row(ui, label, v, lo, hi, default, suffix, false)
+/// Rotary variant of [`param`] for compact layouts (effect cards).
+pub fn knob(ui: &mut Ui, label: &str, v: &mut f32, range: Range, default: f32, suffix: &str, log: bool) -> Response {
+    controls::knob(ui, label, v, range.0, range.1, default, suffix, log)
+}
+
+pub fn knob_num<N: Numeric>(ui: &mut Ui, label: &str, v: &mut N, lo: N, hi: N, default: N, suffix: &str) -> Response {
+    controls::knob(ui, label, v, lo, hi, default, suffix, false)
 }
 
 /// Digits after the decimal point, by the size of the range, so a column of values lines up.
@@ -306,17 +310,7 @@ pub fn section(
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {
             if let Some(g) = grip {
-                let payload = DragPayload { group: egui::Id::new(g.group), index: g.index };
-                let handle = ui
-                    .dnd_drag_source(egui::Id::new(("grip", g.group, key)), payload, |ui| {
-                        ui.label(RichText::new(icon::DOTS_SIX_VERTICAL).color(p.faint).size(16.0));
-                    })
-                    .response
-                    .on_hover_cursor(CursorIcon::Grab);
-                #[cfg(test)]
-                test_support::GRIPS.with(|g| g.borrow_mut().push(handle.rect));
-                #[cfg(not(test))]
-                let _ = handle;
+                grip_handle(ui, g, key);
             }
             state.show_toggle_button(ui, |ui, openness, resp| {
                 let p = palette(ui);
@@ -338,21 +332,62 @@ pub fn section(
     ui.add_space(CARD_GAP);
 
     let g = grip?;
-    let group = egui::Id::new(g.group);
     let rect = card.response.rect;
-    let payload = egui::DragAndDrop::payload::<DragPayload>(ui.ctx()).filter(|pl| pl.group == group && pl.index != g.index)?;
-    // The drop zone includes half of the gap on each side, so a drop between two cards still lands.
     let half_gap = (CARD_GAP + ui.spacing().item_spacing.y) / 2.0;
-    let over = ui.ctx().pointer_interact_pos().is_some_and(|pt| rect.expand2(Vec2::new(0.0, half_gap)).contains(pt));
-    if !over {
+    drop_zone(ui, rect, g, Axis::Vertical, half_gap)
+}
+
+/// Drag handle of a reorderable card. Dragging it carries the card's place in its group.
+pub fn grip_handle(ui: &mut Ui, grip: Grip, key: &str) -> Response {
+    let p = palette(ui);
+    let payload = DragPayload { group: egui::Id::new(grip.group), index: grip.index };
+    let handle = ui
+        .dnd_drag_source(egui::Id::new(("grip", grip.group, key)), payload, |ui| {
+            ui.label(RichText::new(icon::DOTS_SIX_VERTICAL).color(p.faint).size(16.0));
+        })
+        .response
+        .on_hover_cursor(CursorIcon::Grab);
+    #[cfg(test)]
+    test_support::GRIPS.with(|g| g.borrow_mut().push(handle.rect));
+    handle
+}
+
+#[derive(Clone, Copy)]
+pub enum Axis {
+    Vertical,
+    Horizontal,
+}
+
+/// Drop target for the card in `rect`, while a card of the same group is dragged. The zone includes
+/// `half_gap` on each side along `axis`, so a drop between two cards still lands. Returns
+/// `(from, to)` on release; otherwise draws a line on the side where the dragged card will land.
+pub fn drop_zone(ui: &mut Ui, rect: Rect, grip: Grip, axis: Axis, half_gap: f32) -> Option<(usize, usize)> {
+    let p = palette(ui);
+    let group = egui::Id::new(grip.group);
+    let payload = egui::DragAndDrop::payload::<DragPayload>(ui.ctx()).filter(|pl| pl.group == group && pl.index != grip.index)?;
+    let zone = match axis {
+        Axis::Vertical => rect.expand2(Vec2::new(0.0, half_gap)),
+        Axis::Horizontal => rect.expand2(Vec2::new(half_gap, 0.0)),
+    };
+    if !ui.ctx().pointer_interact_pos().is_some_and(|pt| zone.contains(pt)) {
         return None;
     }
     if ui.input(|i| i.pointer.any_released()) {
-        return Some((payload.index, g.index));
+        return Some((payload.index, grip.index));
     }
     // Dropping moves the dragged card to this slot, so the line goes on the side it will land.
-    let y = if payload.index > g.index { rect.top() - half_gap } else { rect.bottom() + half_gap };
-    ui.painter().hline(rect.x_range(), y, Stroke::new(2.0, p.accent));
+    let after = payload.index < grip.index;
+    let stroke = Stroke::new(2.0, p.accent);
+    match axis {
+        Axis::Vertical => {
+            let y = if after { rect.bottom() + half_gap } else { rect.top() - half_gap };
+            ui.painter().hline(rect.x_range(), y, stroke);
+        }
+        Axis::Horizontal => {
+            let x = if after { rect.right() + half_gap } else { rect.left() - half_gap };
+            ui.painter().vline(x, rect.y_range(), stroke);
+        }
+    }
     None
 }
 

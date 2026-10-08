@@ -993,7 +993,7 @@ mod render_smoke {
         let (mut auto, mut vol, mut note) = (true, 0.8f32, None);
         *t += 0.016;
         let input = egui::RawInput {
-            screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 1400.0))),
+            screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 2800.0))),
             events,
             time: Some(*t),
             ..Default::default()
@@ -1047,6 +1047,73 @@ mod render_smoke {
         let saved = actions.iter().find_map(|a| if let Action::SaveSectionOrder(s) = a { Some(s.clone()) } else { None });
         let saved = saved.expect("dropping on another card should save a new order");
         assert!(!saved.starts_with("source,"), "source should have moved down, got {saved}");
+    }
+
+    /// Effects are horizontal cards; dragging one by its handle onto another reorders the chain.
+    #[test]
+    fn dragging_an_effect_card_reorders_the_chain() {
+        use eframe::egui::PointerButton;
+        use sfxc_core::patch::{Effect, EffectKind};
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let mut cur = Current {
+            id: 1,
+            name: "a".into(),
+            tags: String::new(),
+            patch: generators::generate(Category::PickupCoin, Mode::Modern, 3),
+            saved_json: String::new(),
+            changed_at: None,
+        };
+        cur.patch.master_effects = EffectKind::all_defaults().into_iter().take(3).enumerate().map(|(i, kind)| Effect { id: i as u64 + 1, enabled: true, kind }).collect();
+        let (mut t, mut actions) = (0.0, Vec::new());
+        frame(&ctx, &mut cur, &mut t, vec![], &mut actions);
+        widgets::test_support::take_grips();
+        frame(&ctx, &mut cur, &mut t, vec![], &mut actions);
+        let grips = widgets::test_support::take_grips();
+        assert_eq!(grips.len(), 5 + 3, "five settings cards and three effect cards");
+        let start = grips[5].center();
+        let button = |pos, pressed| Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Default::default() };
+        frame(&ctx, &mut cur, &mut t, vec![Event::PointerMoved(start)], &mut actions);
+        frame(&ctx, &mut cur, &mut t, vec![button(start, true)], &mut actions);
+        let mut at = start;
+        for _ in 0..10 {
+            at.x += 45.0;
+            frame(&ctx, &mut cur, &mut t, vec![Event::PointerMoved(at)], &mut actions);
+        }
+        frame(&ctx, &mut cur, &mut t, vec![button(at, false)], &mut actions);
+        frame(&ctx, &mut cur, &mut t, vec![], &mut actions);
+        let ids: Vec<u64> = cur.patch.master_effects.iter().map(|e| e.id).collect();
+        assert_eq!(ids, vec![2, 3, 1], "first card dropped on the third");
+    }
+
+    /// Clicking an effect card's title folds it, like the sound-settings cards.
+    #[test]
+    fn clicking_an_effect_title_folds_the_card() {
+        use sfxc_core::patch::{Effect, EffectKind};
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let mut cur = Current {
+            id: 1,
+            name: "a".into(),
+            tags: String::new(),
+            patch: generators::generate(Category::PickupCoin, Mode::Modern, 3),
+            saved_json: String::new(),
+            changed_at: None,
+        };
+        cur.patch.master_effects = vec![Effect { id: 7, enabled: true, kind: EffectKind::all_defaults()[0] }];
+        let (mut t, mut actions) = (0.0, Vec::new());
+        frame(&ctx, &mut cur, &mut t, vec![], &mut actions);
+        widgets::test_support::take_grips();
+        frame(&ctx, &mut cur, &mut t, vec![], &mut actions);
+        let grip = *widgets::test_support::take_grips().last().expect("effect handle");
+        let title = grip.center() + vec2(40.0, 0.0);
+        let button = |pressed| Event::PointerButton { pos: title, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+        frame(&ctx, &mut cur, &mut t, vec![Event::PointerMoved(title)], &mut actions);
+        frame(&ctx, &mut cur, &mut t, vec![button(true)], &mut actions);
+        frame(&ctx, &mut cur, &mut t, vec![button(false)], &mut actions);
+        frame(&ctx, &mut cur, &mut t, vec![], &mut actions);
+        let open = ctx.data(|d| d.get_temp::<bool>(egui::Id::new(("fx_open", 7u64))));
+        assert_eq!(open, Some(false), "title click should fold the card");
     }
 
     fn sweep(picker_open: bool) {
