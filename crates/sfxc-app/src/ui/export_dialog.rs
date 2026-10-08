@@ -93,10 +93,11 @@ pub fn panel(ui: &mut Ui, d: &mut ExportDialog, natural_secs: Option<f32>) {
                 });
             }
             field(ui, "Length", |ui| {
-                if dropdown(ui, "export_length", 80.0, &mut d.fixed_length, &[(false, "Auto"), (true, "Fixed")]) && d.fixed_length {
-                    if let Some(n) = natural_secs {
-                        d.seconds = n.clamp(SECONDS.0, SECONDS.1);
-                    }
+                if dropdown(ui, "export_length", 80.0, &mut d.fixed_length, &[(false, "Auto"), (true, "Fixed")])
+                    && d.fixed_length
+                    && let Some(n) = natural_secs
+                {
+                    d.seconds = n.clamp(SECONDS.0, SECONDS.1);
                 }
                 if d.fixed_length {
                     super::controls::track(ui, &mut d.seconds, SECONDS.0, SECONDS.1, 1.0, true, 120.0);

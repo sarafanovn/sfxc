@@ -228,7 +228,7 @@ fn transport(
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 20.0;
                     let mode = cur.patch.mode;
-                    let before = cur.patch.layers[0].source.clone();
+                    let before = cur.patch.layers[0].source;
                     wave_field(ui, &mut cur.patch.layers[0], mode);
                     wave_extras(ui, &mut cur.patch.layers[0], mode);
                     if cur.patch.layers[0].source != before {
