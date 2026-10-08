@@ -464,6 +464,18 @@ impl SfxcApp {
         });
     }
 
+    /// Space and the play button: stop if something is playing or about to, otherwise play.
+    fn toggle_play(&mut self) {
+        if self.play_when_ready.take().is_some() {
+            return;
+        }
+        if self.player.is_playing() {
+            self.player.stop();
+        } else {
+            self.play();
+        }
+    }
+
     fn play(&mut self) {
         match &self.rendered {
             Some(r) if r.generation == self.generation => self.player.play(r.samples.clone()),
@@ -547,7 +559,7 @@ impl SfxcApp {
             Action::AskDelete(id) => self.confirm_delete = Some(id),
             Action::RenameSound(id, name) => self.rename_sound(id, name),
             Action::SetTags(tags) => self.set_tags(tags),
-            Action::Play => self.play(),
+            Action::Play => self.toggle_play(),
             Action::Generate(c) => self.generate(c),
             Action::Mutate => self.mutate(),
             Action::Undo => self.undo(),

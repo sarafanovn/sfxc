@@ -353,10 +353,10 @@ pub fn play_button(ui: &mut Ui, playing: bool) -> Response {
     let c = rect.center() + Vec2::splat(m.press.clamp(0.0, 1.0));
     let fill = p.accent.lerp_to_gamma(p.accent_hover, m.hover);
     material::raised(ui.painter(), Rect::from_center_size(rect.center(), Vec2::splat(44.0)), 22.0, &Palette { raised: fill, ..p }, &m);
-    let glyph = if playing { egui_phosphor::fill::WAVEFORM } else { egui_phosphor::fill::PLAY };
+    let glyph = if playing { egui_phosphor::fill::STOP } else { egui_phosphor::fill::PLAY };
     let offset = if playing { Vec2::ZERO } else { Vec2::new(1.5, 0.0) };
     ui.painter().text(c + offset, Align2::CENTER_CENTER, glyph, FontId::new(20.0, theme::icon_fill()), p.on_accent);
-    resp.on_hover_cursor(CursorIcon::PointingHand).on_hover_text("Play (Space)")
+    resp.on_hover_cursor(CursorIcon::PointingHand).on_hover_text(if playing { "Stop (Space)" } else { "Play (Space)" })
 }
 
 /// Filled waveform with a playhead. `progress` is the played fraction while audio runs.

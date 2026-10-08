@@ -141,6 +141,18 @@ impl Player {
         }
     }
 
+    /// Stops playback immediately; the next `play` starts from the beginning.
+    pub fn stop(&self) {
+        if let Ok(mut g) = self.state.lock() {
+            *g = None;
+        }
+    }
+
+    /// True while a buffer is queued and not yet played to the end.
+    pub fn is_playing(&self) -> bool {
+        self.state.lock().ok().is_some_and(|g| g.as_ref().is_some_and(|pb| pb.pos < pb.samples.len()))
+    }
+
     /// Fraction of the current buffer already played, while something is playing.
     pub fn progress(&self) -> Option<f32> {
         let g = self.state.try_lock().ok()?;
@@ -171,6 +183,17 @@ mod tests {
         }
         assert_eq!(volume_from_slider(0.5), 0.25);
         assert_eq!(volume_from_slider(2.0), 1.0);
+    }
+
+    #[test]
+    fn stop_ends_playback() {
+        let p = Player::new();
+        assert!(!p.is_playing());
+        // Long enough that a real device cannot finish it during the test.
+        p.play(Arc::new(vec![0.1; 4_000_000]));
+        assert!(p.is_playing());
+        p.stop();
+        assert!(!p.is_playing());
     }
 
     #[test]
