@@ -212,6 +212,8 @@ fn fx_add(store: &Store, ctx: &Ctx, sound: &str, name: &str, layer: Option<usize
 const ANALYZE_RATE: u32 = 44_100;
 /// Same default as the app's export dialog.
 const DEFAULT_OGG_QUALITY: f32 = 6.0;
+/// Rates the renderer and encoders handle without panicking; the app only offers 44.1 kHz.
+const RATE_RANGE: std::ops::RangeInclusive<u32> = 8_000..=192_000;
 
 fn export(store: &Store, ctx: &Ctx, args: &ExportArgs) -> Result<Value> {
     if args.linked {
@@ -241,6 +243,12 @@ fn options_from(args: &ExportArgs, path: &Path, mode: Mode) -> Result<ExportOpti
             _ => bail!("cannot tell the format from `{}`; add --format wav or --format ogg", path.display()),
         },
     };
+    if let Some(rate) = args.rate.filter(|r| !RATE_RANGE.contains(r)) {
+        bail!("--rate {rate} is out of range; use {} to {} Hz", RATE_RANGE.start(), RATE_RANGE.end());
+    }
+    if let Some(length) = args.length.filter(|l| l.is_nan() || *l <= 0.0) {
+        bail!("--length {length} must be above 0 seconds");
+    }
     let defaults = ExportOptions::default();
     Ok(ExportOptions {
         format: match format {
@@ -527,6 +535,25 @@ mod tests {
         assert!(e.contains("--to"), "{e}");
         let e = run(&s, Command::Export(export_args(Some("jump"), Some("a.mp3"))), &ctx(&dir)).unwrap_err().to_string();
         assert!(e.contains("--format"), "{e}");
+    }
+
+    #[test]
+    fn export_refuses_a_sample_rate_or_length_that_would_panic() {
+        let dir = temp_dir("badrate");
+        let s = Store::open_in_memory().unwrap();
+        let c = ctx(&dir);
+        let id = new_jump(&s, &c, "jump");
+        for rate in [0, 1, 7_999, 192_001] {
+            let mut args = export_args(Some("jump"), Some("a.wav"));
+            args.rate = Some(rate);
+            let e = run(&s, Command::Export(args), &c).unwrap_err().to_string();
+            assert!(e.contains("--rate"), "{rate}: {e}");
+        }
+        let mut args = export_args(Some("jump"), Some("a.wav"));
+        args.length = Some(0.0);
+        let e = run(&s, Command::Export(args), &c).unwrap_err().to_string();
+        assert!(e.contains("--length"), "{e}");
+        assert_eq!(s.export_link(id).unwrap(), None, "a refused export leaves no link");
     }
 
     #[test]
