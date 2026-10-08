@@ -1,0 +1,15 @@
+[package]
+name = "sfxc-core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hound = "3.5"
+vorbis_rs = "0.5"
+
+[dev-dependencies]
+proptest = "1"
+lewton = "0.10"
