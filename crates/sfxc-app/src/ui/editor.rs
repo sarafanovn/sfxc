@@ -1,93 +1,188 @@
-use eframe::egui;
+use eframe::egui::{self, Align, FontId, Frame, Layout, Margin, RichText, Ui};
+use egui_phosphor::regular as icon;
 use sfxc_core::generators::Category;
 use sfxc_core::mode::{describe_mapping, map_source_to_mode, NES_DUTIES};
 use sfxc_core::patch::*;
 
-use super::widgets::{param, waveform};
+use super::theme::{self, palette};
+use super::widgets::{
+    accent_slider, banner, row_label, button, card, card_frame, icon_button, param, play_button, segmented, toggle, waveform, Kind, Tone,
+};
 use super::{effects, Action, Current};
 
-#[allow(clippy::too_many_arguments)]
+/// Read-only state the editor shows but does not own.
+pub struct View<'a> {
+    pub rendered: Option<(&'a [f32], u32)>,
+    pub progress: Option<f32>,
+    pub can_undo: bool,
+    pub can_redo: bool,
+    pub audio_error: Option<&'a str>,
+}
+
+/// Two parameter columns from this editor width.
+const TWO_COLUMNS: f32 = 640.0;
+
 pub fn show(
-    ui: &mut egui::Ui,
+    ui: &mut Ui,
     cur: &mut Current,
-    rendered: Option<(&[f32], u32)>,
+    view: &View,
     autoplay: &mut bool,
     mode_note: &mut Option<String>,
-    audio_error: Option<&str>,
     actions: &mut Vec<Action>,
 ) {
-    toolbar(ui, cur, autoplay, mode_note, actions);
-    if let Some(err) = audio_error {
-        ui.colored_label(ui.visuals().warn_fg_color, format!("{err}. Editing and export still work."));
-    }
-    ui.horizontal_wrapped(|ui| {
-        for c in Category::ALL {
-            if ui.button(c.label()).clicked() {
-                actions.push(Action::Generate(c));
-            }
-        }
-        ui.separator();
-        if ui.button("Mutate").on_hover_text("M").clicked() {
-            actions.push(Action::Mutate);
-        }
-    });
-    ui.add_space(4.0);
-    waveform(ui, rendered);
-    ui.add_space(4.0);
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-        let mode = cur.patch.mode;
-        let layer = &mut cur.patch.layers[0];
-        ui.columns(2, |cols| {
-            source_panel(&mut cols[0], layer, mode);
-            pitch_panel(&mut cols[0], layer);
-            envelope_panel(&mut cols[1], layer);
-            filter_panel(&mut cols[1], layer);
+        Frame::new().inner_margin(Margin { left: 24, right: 24, top: 16, bottom: 24 }).show(ui, |ui| {
+            header(ui, cur, view, actions);
+            ui.add_space(14.0);
+            if let Some(err) = view.audio_error {
+                banner(ui, Tone::Warn, icon::SPEAKER_SLASH, &format!("{err}. Editing and export still work."), false);
+                ui.add_space(10.0);
+            }
+            transport(ui, cur, view, autoplay, mode_note, actions);
+            ui.add_space(12.0);
+            generators(ui, actions);
+            ui.add_space(16.0);
+
+            let mode = cur.patch.mode;
+            let layer = &mut cur.patch.layers[0];
+            if ui.available_width() >= TWO_COLUMNS {
+                ui.columns(2, |cols| {
+                    source_card(&mut cols[0], layer, mode);
+                    pitch_card(&mut cols[0], layer);
+                    envelope_card(&mut cols[1], layer);
+                    filter_card(&mut cols[1], layer);
+                });
+            } else {
+                source_card(ui, layer, mode);
+                pitch_card(ui, layer);
+                envelope_card(ui, layer);
+                filter_card(ui, layer);
+            }
+            ui.add_space(8.0);
+            let next_id = cur.patch.next_effect_id();
+            effects::show(ui, &mut cur.patch.master_effects, next_id);
         });
-        ui.separator();
-        let next_id = cur.patch.next_effect_id();
-        effects::show(ui, &mut cur.patch.master_effects, next_id);
     });
 }
 
-fn toolbar(ui: &mut egui::Ui, cur: &mut Current, autoplay: &mut bool, mode_note: &mut Option<String>, actions: &mut Vec<Action>) {
-    ui.add_space(6.0);
+fn header(ui: &mut Ui, cur: &mut Current, view: &View, actions: &mut Vec<Action>) {
+    let p = palette(ui);
     ui.horizontal(|ui| {
-        let name = ui.add(egui::TextEdit::singleline(&mut cur.name).desired_width(180.0).font(egui::TextStyle::Heading));
-        if name.lost_focus() {
-            actions.push(Action::Rename(cur.name.clone()));
-        }
-        let tags = ui.add(egui::TextEdit::singleline(&mut cur.tags).desired_width(140.0).hint_text("tags"));
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if button(ui, Kind::Secondary, Some(icon::EXPORT), "Export").on_hover_text("⌘E").clicked() {
+                actions.push(Action::Export);
+            }
+            ui.add_space(6.0);
+            ui.add_enabled_ui(view.can_redo, |ui| {
+                if icon_button(ui, icon::ARROW_U_UP_RIGHT, "Redo (⇧⌘Z)").clicked() {
+                    actions.push(Action::Redo);
+                }
+            });
+            ui.add_enabled_ui(view.can_undo, |ui| {
+                if icon_button(ui, icon::ARROW_U_UP_LEFT, "Undo (⌘Z)").clicked() {
+                    actions.push(Action::Undo);
+                }
+            });
+            ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                let name = ui.add(
+                    egui::TextEdit::singleline(&mut cur.name)
+                        .font(theme::title_style())
+                        .text_color(p.text)
+                        .frame(Frame::new().inner_margin(Margin::symmetric(4, 2)))
+                        .desired_width(ui.available_width() - 12.0),
+                );
+                if name.lost_focus() {
+                    actions.push(Action::Rename(cur.name.clone()));
+                }
+            });
+        });
+    });
+    ui.horizontal(|ui| {
+        ui.add_space(4.0);
+        ui.label(RichText::new(icon::TAG).color(p.faint));
+        let tags = ui.add(
+            egui::TextEdit::singleline(&mut cur.tags)
+                .hint_text(RichText::new("Add tags").color(p.faint))
+                .text_color(p.muted)
+                .frame(Frame::NONE)
+                .desired_width(ui.available_width()),
+        );
         if tags.lost_focus() {
             actions.push(Action::SetTags(cur.tags.clone()));
         }
-        ui.separator();
-        let before = cur.patch.mode;
-        for m in Mode::ALL {
-            ui.selectable_value(&mut cur.patch.mode, m, m.label());
+    });
+}
+
+fn transport(ui: &mut Ui, cur: &mut Current, view: &View, autoplay: &mut bool, mode_note: &mut Option<String>, actions: &mut Vec<Action>) {
+    card_frame(ui).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.horizontal(|ui| {
+            ui.vertical(|ui| {
+                ui.add_space(22.0);
+                if play_button(ui, view.progress.is_some()).clicked() {
+                    actions.push(Action::Play);
+                }
+            });
+            ui.add_space(6.0);
+            waveform(ui, view.rendered, view.progress, 92.0);
+        });
+        ui.add_space(10.0);
+        ui.horizontal(|ui| {
+            let before = cur.patch.mode;
+            let modes: Vec<_> = Mode::ALL.iter().map(|m| (*m, m.label())).collect();
+            segmented(ui, &mut cur.patch.mode, &modes);
+            if cur.patch.mode != before {
+                apply_mode(&mut cur.patch, mode_note);
+            }
+            ui.add_space(12.0);
+            toggle(ui, autoplay, "Auto-play").on_hover_text("Play after every change");
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.spacing_mut().slider_width = 120.0;
+                let r = accent_slider(ui, egui::Slider::new(&mut cur.patch.master_volume, ranges::UNIT.0..=ranges::UNIT.1).show_value(false));
+                if r.double_clicked() {
+                    cur.patch.master_volume = 0.8;
+                }
+                ui.label(RichText::new(icon::SPEAKER_HIGH).color(palette(ui).muted).size(16.0)).on_hover_text("Volume");
+            });
+        });
+    });
+    if let Some(note) = mode_note.as_ref() {
+        ui.add_space(8.0);
+        if banner(ui, Tone::Accent, icon::INFO, note, true) {
+            *mode_note = None;
         }
-        if cur.patch.mode != before {
-            apply_mode(&mut cur.patch, mode_note);
+    }
+}
+
+fn category_icon(c: Category) -> &'static str {
+    match c {
+        Category::PickupCoin => icon::COIN,
+        Category::LaserShoot => icon::CROSSHAIR,
+        Category::Explosion => icon::FIRE,
+        Category::PowerUp => icon::ARROW_FAT_UP,
+        Category::HitHurt => icon::HEART_BREAK,
+        Category::Jump => icon::ARROW_LINE_UP,
+        Category::BlipSelect => icon::CURSOR_CLICK,
+        Category::Random => icon::DICE_FIVE,
+    }
+}
+
+fn generators(ui: &mut Ui, actions: &mut Vec<Action>) {
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+        for c in Category::ALL {
+            if button(ui, Kind::Secondary, Some(category_icon(c)), c.label())
+                .on_hover_text(format!("Generate a new {} sound", c.label().to_lowercase()))
+                .clicked()
+            {
+                actions.push(Action::Generate(c));
+            }
         }
-        ui.separator();
-        if ui.button("▶ Play").on_hover_text("Space").clicked() {
-            actions.push(Action::Play);
-        }
-        ui.checkbox(autoplay, "Auto-play");
-        param(ui, "Volume", &mut cur.patch.master_volume, ranges::UNIT, 0.8, "", false);
-        if ui.button("Export…").on_hover_text("⌘E").clicked() {
-            actions.push(Action::Export);
+        ui.add_space(6.0);
+        if button(ui, Kind::Ghost, Some(icon::MAGIC_WAND), "Mutate").on_hover_text("Small random changes (M)").clicked() {
+            actions.push(Action::Mutate);
         }
     });
-    let mut dismiss = false;
-    if let Some(note) = mode_note.as_ref() {
-        ui.horizontal(|ui| {
-            ui.weak(note.as_str());
-            dismiss = ui.small_button("✕").clicked();
-        });
-    }
-    if dismiss {
-        *mode_note = None;
-    }
 }
 
 fn apply_mode(patch: &mut SoundPatch, note: &mut Option<String>) {
@@ -102,34 +197,35 @@ fn apply_mode(patch: &mut SoundPatch, note: &mut Option<String>) {
     }
 }
 
-fn section(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui)) {
-    ui.group(|ui| {
-        ui.set_width(ui.available_width());
-        ui.strong(title);
+/// Muted label column matching [`param`] rows, followed by `add`.
+fn labeled(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui)) {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 10.0;
+        row_label(ui, label);
         add(ui);
     });
-    ui.add_space(4.0);
 }
 
-fn source_panel(ui: &mut egui::Ui, layer: &mut Layer, mode: Mode) {
-    section(ui, "Source", |ui| {
+fn source_card(ui: &mut Ui, layer: &mut Layer, mode: Mode) {
+    card(ui, "Source", |_| {}, |ui| {
         let kinds: &[&'static str] = if mode == Mode::Bit8 { &["Pulse", "Triangle", "Noise"] } else { &Source::KIND_NAMES };
         let mut kind = layer.source.kind_name();
-        egui::ComboBox::from_id_salt("source_kind").selected_text(kind).show_ui(ui, |ui| {
-            for k in kinds {
-                ui.selectable_value(&mut kind, *k, *k);
-            }
+        labeled(ui, "Waveform", |ui| {
+            egui::ComboBox::from_id_salt("source_kind").selected_text(kind).width(ui.available_width()).show_ui(ui, |ui| {
+                for k in kinds {
+                    ui.selectable_value(&mut kind, *k, *k);
+                }
+            });
         });
         if kind != layer.source.kind_name() {
             layer.source = map_source_to_mode(&Source::default_of_kind(kind), mode);
         }
         match &mut layer.source {
             Source::Pulse { duty } if mode == Mode::Bit8 => {
-                ui.horizontal(|ui| {
-                    ui.label("Duty");
-                    for d in NES_DUTIES {
-                        ui.selectable_value(duty, d, format!("{}%", d * 100.0));
-                    }
+                let labels: Vec<String> = NES_DUTIES.iter().map(|d| format!("{}%", d * 100.0)).collect();
+                let options: Vec<_> = NES_DUTIES.iter().zip(&labels).map(|(d, l)| (*d, l.as_str())).collect();
+                labeled(ui, "Duty", |ui| {
+                    segmented(ui, duty, &options);
                 });
             }
             Source::Pulse { duty } => {
@@ -138,10 +234,9 @@ fn source_panel(ui: &mut egui::Ui, layer: &mut Layer, mode: Mode) {
             Source::Noise { kind } => {
                 let kinds: &[NoiseKind] =
                     if mode == Mode::Bit8 { &[NoiseKind::LfsrLong, NoiseKind::LfsrShort] } else { &NoiseKind::ALL };
-                ui.horizontal(|ui| {
-                    for k in kinds {
-                        ui.selectable_value(kind, *k, k.label());
-                    }
+                let options: Vec<_> = kinds.iter().map(|k| (*k, k.label())).collect();
+                labeled(ui, "Noise", |ui| {
+                    segmented(ui, kind, &options);
                 });
             }
             Source::Fm { algorithm, feedback, ops } => fm_controls(ui, algorithm, feedback, ops),
@@ -150,16 +245,22 @@ fn source_panel(ui: &mut egui::Ui, layer: &mut Layer, mode: Mode) {
     });
 }
 
-fn fm_controls(ui: &mut egui::Ui, algorithm: &mut FmAlgorithm, feedback: &mut f32, ops: &mut [FmOperator; 4]) {
-    egui::ComboBox::from_id_salt("fm_algorithm").selected_text(algorithm.label()).show_ui(ui, |ui| {
-        for a in FmAlgorithm::ALL {
-            ui.selectable_value(algorithm, a, a.label());
-        }
+fn fm_controls(ui: &mut Ui, algorithm: &mut FmAlgorithm, feedback: &mut f32, ops: &mut [FmOperator; 4]) {
+    labeled(ui, "Algorithm", |ui| {
+        egui::ComboBox::from_id_salt("fm_algorithm").selected_text(algorithm.label()).width(ui.available_width()).show_ui(
+            ui,
+            |ui| {
+                for a in FmAlgorithm::ALL {
+                    ui.selectable_value(algorithm, a, a.label());
+                }
+            },
+        );
     });
     param(ui, "Feedback", feedback, ranges::UNIT, 0.0, "", false);
     let d = FmOperator::default();
     for (i, op) in ops.iter_mut().enumerate() {
-        egui::CollapsingHeader::new(format!("Operator {}", i + 1))
+        ui.add_space(2.0);
+        egui::CollapsingHeader::new(RichText::new(format!("Operator {}", i + 1)).font(FontId::new(13.0, theme::semibold())))
             .id_salt(("fm_op", i))
             .default_open(i == 3)
             .show(ui, |ui| {
@@ -173,26 +274,28 @@ fn fm_controls(ui: &mut egui::Ui, algorithm: &mut FmAlgorithm, feedback: &mut f3
     }
 }
 
-fn pitch_panel(ui: &mut egui::Ui, layer: &mut Layer) {
+fn pitch_card(ui: &mut Ui, layer: &mut Layer) {
     let d = Pitch::default();
-    section(ui, "Pitch", |ui| {
+    card(ui, "Pitch", |_| {}, |ui| {
         let p = &mut layer.pitch;
         param(ui, "Frequency", &mut p.base_freq, ranges::BASE_FREQ, d.base_freq, " Hz", true);
         param(ui, "Slide", &mut p.slide, ranges::SLIDE, 0.0, " oct/s", false);
         param(ui, "Slide accel", &mut p.delta_slide, ranges::DELTA_SLIDE, 0.0, " oct/s²", false);
         param(ui, "Vibrato depth", &mut p.vibrato_depth, ranges::VIBRATO_DEPTH, 0.0, " st", false);
         param(ui, "Vibrato rate", &mut p.vibrato_rate, ranges::VIBRATO_RATE, d.vibrato_rate, " Hz", false);
-        ui.horizontal_wrapped(|ui| {
-            ui.label("Arpeggio");
-            for s in p.arp_steps.iter_mut() {
-                ui.add(egui::DragValue::new(s).range(-24..=24).suffix(" st"));
-            }
-            if p.arp_steps.len() < MAX_ARP_STEPS && ui.small_button("+").clicked() {
-                p.arp_steps.push(0);
-            }
-            if !p.arp_steps.is_empty() && ui.small_button("−").clicked() {
-                p.arp_steps.pop();
-            }
+        labeled(ui, "Arpeggio", |ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            ui.horizontal_wrapped(|ui| {
+                for s in p.arp_steps.iter_mut() {
+                    ui.add(egui::DragValue::new(s).range(-24..=24).suffix(" st"));
+                }
+                if p.arp_steps.len() < MAX_ARP_STEPS && icon_button(ui, icon::PLUS, "Add step").clicked() {
+                    p.arp_steps.push(0);
+                }
+                if !p.arp_steps.is_empty() && icon_button(ui, icon::MINUS, "Remove last step").clicked() {
+                    p.arp_steps.pop();
+                }
+            });
         });
         if !p.arp_steps.is_empty() {
             param(ui, "Arp step", &mut p.arp_speed, ranges::ARP_SPEED, d.arp_speed, " s", true);
@@ -200,9 +303,9 @@ fn pitch_panel(ui: &mut egui::Ui, layer: &mut Layer) {
     });
 }
 
-fn envelope_panel(ui: &mut egui::Ui, layer: &mut Layer) {
+fn envelope_card(ui: &mut Ui, layer: &mut Layer) {
     let d = Envelope::default();
-    section(ui, "Envelope", |ui| {
+    card(ui, "Envelope", |_| {}, |ui| {
         let e = &mut layer.env;
         param(ui, "Attack", &mut e.attack, ranges::ENV_TIME, d.attack, " s", true);
         param(ui, "Decay", &mut e.decay, ranges::ENV_TIME, d.decay, " s", true);
@@ -213,15 +316,13 @@ fn envelope_panel(ui: &mut egui::Ui, layer: &mut Layer) {
     });
 }
 
-fn filter_panel(ui: &mut egui::Ui, layer: &mut Layer) {
+fn filter_card(ui: &mut Ui, layer: &mut Layer) {
     let d = Filter::default();
-    section(ui, "Filter", |ui| {
-        let f = &mut layer.filter;
-        ui.horizontal(|ui| {
-            for k in FilterKind::ALL {
-                ui.selectable_value(&mut f.kind, k, k.label());
-            }
-        });
+    let f = &mut layer.filter;
+    card(ui, "Filter", |_| {}, |ui| {
+        let options: Vec<_> = FilterKind::ALL.iter().map(|k| (*k, k.label())).collect();
+        segmented(ui, &mut f.kind, &options);
+        ui.add_space(4.0);
         ui.add_enabled_ui(f.kind != FilterKind::Off, |ui| {
             param(ui, "Cutoff", &mut f.cutoff, ranges::CUTOFF, d.cutoff, " Hz", true);
             param(ui, "Resonance", &mut f.resonance, ranges::UNIT, d.resonance, "", false);

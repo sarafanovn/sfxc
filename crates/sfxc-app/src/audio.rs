@@ -86,7 +86,10 @@ impl Player {
             },
             move |err| {
                 eprintln!("audio stream error: {err}");
-                failed.store(true, Ordering::SeqCst);
+                // Glitches and automatic rerouting leave the stream running; only rebuild when it is dead.
+                if !matches!(err.kind(), cpal::ErrorKind::Xrun | cpal::ErrorKind::DeviceChanged | cpal::ErrorKind::RealtimeDenied) {
+                    failed.store(true, Ordering::SeqCst);
+                }
             },
             None,
         )?;
@@ -110,6 +113,13 @@ impl Player {
         if let Ok(mut g) = self.state.lock() {
             *g = Some(Playback { samples, pos: 0 });
         }
+    }
+
+    /// Fraction of the current buffer already played, while something is playing.
+    pub fn progress(&self) -> Option<f32> {
+        let g = self.state.try_lock().ok()?;
+        let pb = g.as_ref()?;
+        (self.stream.is_some() && pb.pos < pb.samples.len()).then(|| pb.pos as f32 / pb.samples.len() as f32)
     }
 
     /// Call once per UI frame.

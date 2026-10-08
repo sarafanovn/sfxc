@@ -4,6 +4,7 @@ mod editor;
 mod effects;
 mod export_dialog;
 mod library;
+mod theme;
 mod versions;
 mod widgets;
 
@@ -21,6 +22,9 @@ use crate::history::History;
 use crate::render_worker::{RenderJob, RenderResult, RenderWorker};
 use crate::store::{SoundSummary, Store, VersionInfo};
 use export_dialog::{ExportDialog, Outcome};
+use library::Prefs;
+use theme::ThemeChoice;
+use widgets::{button, dialog, Kind};
 
 /// Commit an automatic version after this long with unversioned changes.
 const AUTO_VERSION_SECS: i64 = 300;
@@ -28,6 +32,8 @@ const AUTO_VERSION_CHECK: Duration = Duration::from_secs(10);
 /// Debounce for writing the draft to disk.
 const DRAFT_SAVE_DELAY: Duration = Duration::from_millis(500);
 const TOAST_TIME: Duration = Duration::from_secs(4);
+/// Height of the custom title bar drawn under the macOS traffic lights.
+const TITLEBAR_H: f32 = 30.0;
 
 pub fn now_secs() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64)
@@ -56,6 +62,20 @@ pub enum Action {
     DuplicateVersion(i64),
     DuplicateCurrent,
     Export,
+    SetTheme(ThemeChoice),
+    SetScale(f32),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ToastKind {
+    Success,
+    Error,
+}
+
+struct Toast {
+    msg: String,
+    kind: ToastKind,
+    at: Instant,
 }
 
 pub struct Current {
@@ -68,6 +88,8 @@ pub struct Current {
 }
 
 pub struct SfxcApp {
+    ctx: egui::Context,
+    prefs: Prefs,
     db_path: PathBuf,
     store: Option<Store>,
     store_error: Option<String>,
@@ -90,16 +112,18 @@ pub struct SfxcApp {
     export_open: bool,
     note_prompt: Option<String>,
     confirm_delete: Option<i64>,
-    toasts: Vec<(String, Instant)>,
+    toasts: Vec<Toast>,
     last_auto_check: Instant,
 }
 
 impl SfxcApp {
     pub fn new(cc: &eframe::CreationContext<'_>, db_path: PathBuf) -> Self {
-        cc.egui_ctx.set_visuals(egui::Visuals::dark());
+        theme::install(&cc.egui_ctx);
         let ctx = cc.egui_ctx.clone();
         let worker = RenderWorker::spawn(move || ctx.request_repaint());
         let mut app = Self {
+            ctx: cc.egui_ctx.clone(),
+            prefs: Prefs { theme: ThemeChoice::Auto, scale: 1.0 },
             db_path,
             store: None,
             store_error: None,
@@ -125,7 +149,31 @@ impl SfxcApp {
             last_auto_check: Instant::now(),
         };
         app.open_store();
+        app.apply_prefs();
         app
+    }
+
+    // ---- preferences -------------------------------------------------------
+
+    fn apply_prefs(&self) {
+        self.ctx.set_theme(self.prefs.theme.preference());
+        self.ctx.set_zoom_factor(self.prefs.scale);
+    }
+
+    fn load_prefs(&mut self) {
+        let Some(store) = &self.store else { return };
+        if let Some(t) = store.setting("theme").ok().flatten().and_then(|k| ThemeChoice::from_key(&k)) {
+            self.prefs.theme = t;
+        }
+        if let Some(s) = store.setting("ui_scale").ok().flatten().and_then(|v| v.parse::<f32>().ok()) {
+            self.prefs.scale = theme::UI_SCALES.iter().map(|(v, _)| *v).find(|v| (v - s).abs() < 0.01).unwrap_or(1.0);
+        }
+    }
+
+    fn save_pref(&mut self, key: &str, value: &str) {
+        let Some(store) = &self.store else { return };
+        let r = store.set_setting(key, value);
+        self.check(r);
     }
 
     // ---- library / store -------------------------------------------------
@@ -135,6 +183,7 @@ impl SfxcApp {
             Ok(store) => {
                 self.store = Some(store);
                 self.store_error = None;
+                self.load_prefs();
                 self.refresh_list();
                 if let Some(first) = self.sounds.first().map(|s| s.id) {
                     self.open_sound(first);
@@ -165,7 +214,11 @@ impl SfxcApp {
     }
 
     fn toast(&mut self, msg: impl Into<String>) {
-        self.toasts.push((msg.into(), Instant::now()));
+        self.toasts.push(Toast { msg: msg.into(), kind: ToastKind::Error, at: Instant::now() });
+    }
+
+    fn toast_ok(&mut self, msg: impl Into<String>) {
+        self.toasts.push(Toast { msg: msg.into(), kind: ToastKind::Success, at: Instant::now() });
     }
 
     fn check<T>(&mut self, r: Result<T>) -> Option<T> {
@@ -367,7 +420,7 @@ impl SfxcApp {
                     let _ = store.set_export_dir(cur.id, &parent.to_string_lossy());
                 }
                 self.commit_version("", true);
-                self.toast(format!("Exported {}", path.display()));
+                self.toast_ok(format!("Exported {}", path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned())));
             }
             Err(e) => self.toast(format!("Export failed: {e:#}")),
         }
@@ -482,6 +535,16 @@ impl SfxcApp {
             Action::DuplicateVersion(v) => self.duplicate_version(v),
             Action::DuplicateCurrent => self.duplicate_current(),
             Action::Export => self.export_open = self.current.is_some(),
+            Action::SetTheme(t) => {
+                self.prefs.theme = t;
+                self.apply_prefs();
+                self.save_pref("theme", t.key());
+            }
+            Action::SetScale(v) => {
+                self.prefs.scale = v;
+                self.apply_prefs();
+                self.save_pref("ui_scale", &v.to_string());
+            }
         }
     }
 
@@ -557,18 +620,30 @@ impl SfxcApp {
         if let Some(note) = self.note_prompt.as_mut() {
             let mut done = None;
             let modal = egui::Modal::new(egui::Id::new("version_note")).show(ctx, |ui| {
-                ui.heading("Save version");
-                let r = ui.add(egui::TextEdit::singleline(note).hint_text("Note (optional)"));
-                r.request_focus();
-                let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                ui.horizontal(|ui| {
-                    if ui.button("Save").clicked() || enter {
-                        done = Some(true);
-                    }
-                    if ui.button("Cancel").clicked() {
-                        done = Some(false);
-                    }
-                });
+                let mut enter = false;
+                let (save, cancel) = dialog(
+                    ui,
+                    "Save version",
+                    |ui| {
+                        let r = ui.add(
+                            egui::TextEdit::singleline(note)
+                                .hint_text("What changed? (optional)")
+                                .desired_width(f32::INFINITY)
+                                .margin(egui::Margin::symmetric(8, 6)),
+                        );
+                        r.request_focus();
+                        enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    },
+                    |ui| {
+                        let save = button(ui, Kind::Primary, None, "Save").clicked();
+                        (save, button(ui, Kind::Secondary, None, "Cancel").clicked())
+                    },
+                );
+                if save || enter {
+                    done = Some(true);
+                } else if cancel {
+                    done = Some(false);
+                }
             });
             if done.is_none() && modal.should_close() {
                 done = Some(false);
@@ -584,16 +659,23 @@ impl SfxcApp {
             let name = self.sounds.iter().find(|s| s.id == id).map(|s| s.name.clone()).unwrap_or_default();
             let mut done = None;
             let modal = egui::Modal::new(egui::Id::new("confirm_delete")).show(ctx, |ui| {
-                ui.heading(format!("Delete “{name}”?"));
-                ui.label("The sound and all its versions will be removed.");
-                ui.horizontal(|ui| {
-                    if ui.button("Delete").clicked() {
-                        done = Some(true);
-                    }
-                    if ui.button("Cancel").clicked() {
-                        done = Some(false);
-                    }
-                });
+                let (yes, no) = dialog(
+                    ui,
+                    &format!("Delete “{name}”?"),
+                    |ui| {
+                        let muted = theme::palette(ui).muted;
+                        ui.add(egui::Label::new(egui::RichText::new("The sound and all its versions will be removed. This cannot be undone.").color(muted)).wrap());
+                    },
+                    |ui| {
+                        let yes = button(ui, Kind::Danger, None, "Delete").clicked();
+                        (yes, button(ui, Kind::Secondary, None, "Cancel").clicked())
+                    },
+                );
+                if yes {
+                    done = Some(true);
+                } else if no {
+                    done = Some(false);
+                }
             });
             if done.is_none() && modal.should_close() {
                 done = Some(false);
@@ -626,34 +708,92 @@ impl SfxcApp {
     }
 
     fn show_toasts(&mut self, ctx: &egui::Context) {
-        self.toasts.retain(|(_, t)| t.elapsed() < TOAST_TIME);
+        self.toasts.retain(|t| t.at.elapsed() < TOAST_TIME);
         if self.toasts.is_empty() {
             return;
         }
-        egui::Area::new(egui::Id::new("toasts")).anchor(egui::Align2::RIGHT_BOTTOM, [-12.0, -12.0]).show(ctx, |ui| {
-            for (msg, _) in &self.toasts {
-                egui::Frame::popup(ui.style()).show(ui, |ui| {
-                    ui.label(msg);
-                });
+        let p = theme::palette_of(ctx);
+        egui::Area::new(egui::Id::new("toasts")).anchor(egui::Align2::RIGHT_BOTTOM, [-16.0, -16.0]).show(ctx, |ui| {
+            for t in &self.toasts {
+                // Fade in quickly, fade out over the last 400 ms.
+                let age = t.at.elapsed().as_secs_f32();
+                let left = TOAST_TIME.as_secs_f32() - age;
+                ui.set_opacity((age / 0.15).min(1.0).min(left / 0.4).clamp(0.0, 1.0));
+                let (glyph, color) = match t.kind {
+                    ToastKind::Success => (egui_phosphor::regular::CHECK_CIRCLE, p.accent),
+                    ToastKind::Error => (egui_phosphor::regular::WARNING_CIRCLE, p.danger),
+                };
+                egui::Frame::new()
+                    .fill(p.surface)
+                    .stroke(egui::Stroke::new(1.0, p.border))
+                    .corner_radius(theme::R_CARD)
+                    .shadow(egui::Shadow { offset: [0, 8], blur: 24, spread: 0, color: p.shadow })
+                    .inner_margin(egui::Margin::symmetric(14, 10))
+                    .show(ui, |ui| {
+                        ui.set_max_width(360.0);
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new(glyph).color(color).size(17.0));
+                            ui.add(egui::Label::new(egui::RichText::new(&t.msg).color(p.text)).wrap());
+                        });
+                    });
+                ui.add_space(8.0);
             }
         });
-        ctx.request_repaint_after(Duration::from_millis(250));
+        ctx.request_repaint_after(Duration::from_millis(30));
+    }
+
+    fn title_bar(&self, ui: &mut egui::Ui) {
+        let p = theme::palette_of(ui.ctx());
+        egui::Panel::top("titlebar")
+            .exact_size(TITLEBAR_H)
+            .show_separator_line(false)
+            .frame(egui::Frame::new().fill(p.chrome))
+            .show(ui, |ui| {
+                let rect = ui.max_rect();
+                let resp = ui.interact(rect, egui::Id::new("titlebar_drag"), egui::Sense::click_and_drag());
+                if resp.drag_started_by(egui::PointerButton::Primary) {
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                }
+                if resp.double_clicked() {
+                    let max = ui.input(|i| i.viewport().maximized.unwrap_or(false));
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!max));
+                }
+                let title = self.current.as_ref().map_or("sfxc", |c| c.name.as_str());
+                ui.painter().text(
+                    egui::pos2(rect.center().x, rect.top() + 14.0),
+                    egui::Align2::CENTER_CENTER,
+                    title,
+                    egui::FontId::new(12.5, theme::semibold()),
+                    p.muted,
+                );
+            });
     }
 
     fn library_error_screen(&mut self, ui: &mut egui::Ui) {
-        egui::CentralPanel::default().show(ui, |ui| {
-            ui.heading("Could not open the sound library");
-            ui.label(self.store_error.as_deref().unwrap_or("unknown error"));
-            ui.monospace(self.db_path.display().to_string());
-            ui.add_space(8.0);
-            ui.label("The existing file has not been modified. Retry, or move it aside and start a new library.");
-            ui.horizontal(|ui| {
-                if ui.button("Retry").clicked() {
-                    self.open_store();
-                }
-                if ui.button("Start a new library").clicked() {
-                    self.start_new_library();
-                }
+        let p = theme::palette_of(ui.ctx());
+        egui::CentralPanel::default().frame(egui::Frame::new().fill(p.canvas)).show(ui, |ui| {
+            ui.add_space((ui.available_height() / 2.0 - 160.0).max(24.0));
+            ui.vertical_centered(|ui| {
+                ui.set_max_width(460.0);
+                widgets::card_frame(ui).inner_margin(egui::Margin::same(24)).show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    widgets::banner(ui, widgets::Tone::Danger, egui_phosphor::regular::DATABASE, "Could not open the sound library", false);
+                    ui.add_space(12.0);
+                    ui.add(egui::Label::new(egui::RichText::new(self.store_error.as_deref().unwrap_or("unknown error")).color(p.text)).wrap());
+                    ui.add_space(6.0);
+                    ui.add(egui::Label::new(egui::RichText::new(self.db_path.display().to_string()).monospace().color(p.muted)).wrap());
+                    ui.add_space(12.0);
+                    ui.add(egui::Label::new(egui::RichText::new("The existing file has not been modified. Retry, or move it aside and start a new library.").color(p.muted)).wrap());
+                    ui.add_space(16.0);
+                    ui.horizontal(|ui| {
+                        if button(ui, Kind::Primary, None, "Retry").clicked() {
+                            self.open_store();
+                        }
+                        if button(ui, Kind::Secondary, None, "Start a new library").clicked() {
+                            self.start_new_library();
+                        }
+                    });
+                });
             });
         });
     }
@@ -662,6 +802,7 @@ impl SfxcApp {
 impl eframe::App for SfxcApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        self.title_bar(ui);
         if self.store.is_none() {
             self.library_error_screen(ui);
             return;
@@ -670,25 +811,49 @@ impl eframe::App for SfxcApp {
         let mut actions = Vec::new();
         self.hotkeys(&ctx, &mut actions);
         let now = now_secs();
+        let p = theme::palette_of(&ctx);
+        let side = |left: i8| egui::Frame::new().fill(p.chrome).inner_margin(egui::Margin { left, right: 12, top: 6, bottom: 8 });
 
-        egui::Panel::left("library").resizable(true).default_size(210.0).show(ui, |ui| {
-            library::show(ui, &self.sounds, &mut self.search, self.current.as_ref().map(|c| c.id), &mut actions);
+        egui::Panel::left("library").resizable(true).default_size(230.0).size_range(190.0..=360.0).frame(side(10)).show(ui, |ui| {
+            let current = self.current.as_ref().map(|c| c.id);
+            library::show(ui, &self.sounds, &mut self.search, current, now, &self.prefs, &mut actions);
         });
-        egui::Panel::right("versions").resizable(true).default_size(230.0).show(ui, |ui| {
-            versions::show(ui, &self.versions, self.current_version, now, &mut actions);
+        egui::Panel::right("versions").resizable(true).default_size(250.0).size_range(210.0..=380.0).frame(side(14)).show(ui, |ui| {
+            versions::show(ui, &self.versions, self.current_version, self.current.is_some(), now, &mut actions);
         });
+        let progress = self.player.progress();
+        if progress.is_some() {
+            ctx.request_repaint();
+        }
         let mut before = None;
-        egui::CentralPanel::default().show(ui, |ui| match self.current.as_mut() {
+        egui::CentralPanel::default().frame(egui::Frame::new().fill(p.canvas)).show(ui, |ui| match self.current.as_mut() {
             Some(cur) => {
                 let snapshot = cur.patch.clone();
-                let rendered = self.rendered.as_ref().map(|r| (r.samples.as_slice(), r.sample_rate));
-                editor::show(ui, cur, rendered, &mut self.autoplay, &mut self.mode_note, self.player.error(), &mut actions);
+                let view = editor::View {
+                    rendered: self.rendered.as_ref().map(|r| (r.samples.as_slice(), r.sample_rate)),
+                    progress,
+                    can_undo: self.history.can_undo(),
+                    can_redo: self.history.can_redo(),
+                    audio_error: self.player.error(),
+                };
+                editor::show(ui, cur, &view, &mut self.autoplay, &mut self.mode_note, &mut actions);
                 if cur.patch != snapshot {
                     before = Some(snapshot);
                 }
             }
             None => {
-                ui.centered_and_justified(|ui| ui.heading("Create a sound with + New (⌘N)"));
+                ui.add_space((ui.available_height() / 2.0 - 120.0).max(24.0));
+                widgets::empty_state(
+                    ui,
+                    egui_phosphor::regular::WAVEFORM,
+                    "No sound open",
+                    "Create a sound or pick one from the library. Press ⌘N to start.",
+                    |ui| {
+                        if button(ui, Kind::Primary, Some(egui_phosphor::regular::PLUS), "New sound").clicked() {
+                            actions.push(Action::NewSound);
+                        }
+                    },
+                );
             }
         });
 

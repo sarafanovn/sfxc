@@ -28,6 +28,11 @@ const MIGRATIONS: &[&str] = &[r#"
         patch_json TEXT NOT NULL
     );
     CREATE INDEX versions_by_sound ON versions(sound_id, id);
+"#, r#"
+    CREATE TABLE settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+    );
 "#];
 
 #[derive(Clone, Debug, PartialEq)]
@@ -270,6 +275,19 @@ impl Store {
         self.conn.execute("UPDATE sounds SET last_export_dir = ?1 WHERE id = ?2", params![dir, sound_id])?;
         Ok(())
     }
+
+    /// App preferences (theme, interface size) as plain key/value strings.
+    pub fn setting(&self, key: &str) -> Result<Option<String>> {
+        Ok(self.conn.query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| r.get(0)).optional()?)
+    }
+
+    pub fn set_setting(&self, key: &str, value: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![key, value],
+        )?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -425,5 +443,14 @@ mod tests {
         assert!(Store::open(&path).is_err());
         assert_eq!(std::fs::read(&path).unwrap(), junk);
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn settings_round_trip() {
+        let s = Store::open_in_memory().unwrap();
+        assert_eq!(s.setting("theme").unwrap(), None);
+        s.set_setting("theme", "dark").unwrap();
+        s.set_setting("theme", "light").unwrap();
+        assert_eq!(s.setting("theme").unwrap().as_deref(), Some("light"));
     }
 }
