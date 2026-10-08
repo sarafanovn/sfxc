@@ -49,7 +49,11 @@ pub fn show(
         ui.add_space(4.0);
     });
 
+    widgets::list_well(ui, |ui| {
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        // Row shadows reach past the row; let them draw sideways inside the well.
+        ui.set_clip_rect(ui.clip_rect().expand2(Vec2::new(8.0, 0.0)));
+        ui.spacing_mut().item_spacing.y = 8.0;
         if sounds.is_empty() {
             ui.add_space(24.0);
             if search.trim().is_empty() {
@@ -71,6 +75,7 @@ pub fn show(
         for s in sounds {
             row(ui, s, current == Some(s.id), now, actions);
         }
+    });
     });
 }
 

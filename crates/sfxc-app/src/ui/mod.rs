@@ -849,13 +849,13 @@ impl eframe::App for SfxcApp {
         self.hotkeys(&ctx, &mut actions);
         let now = now_secs();
         let p = theme::palette_of(&ctx);
-        let side = |left: i8| egui::Frame::new().fill(p.chrome).inner_margin(egui::Margin { left, right: 12, top: 6, bottom: 8 });
+        let side = |left: i8| egui::Frame::new().fill(p.chrome).inner_margin(egui::Margin { left, right: 18, top: 10, bottom: 14 });
 
-        egui::Panel::left("library").resizable(true).default_size(230.0).size_range(190.0..=360.0).frame(side(10)).show(ui, |ui| {
+        egui::Panel::left("library").resizable(false).exact_size(268.0).show_separator_line(false).frame(side(18)).show(ui, |ui| {
             let current = self.current.as_ref().map(|c| c.id);
             library::show(ui, &self.sounds, &mut self.search, current, now, &self.prefs, &mut actions);
         });
-        egui::Panel::right("versions").resizable(true).default_size(250.0).size_range(210.0..=380.0).frame(side(14)).show(ui, |ui| {
+        egui::Panel::right("versions").resizable(false).exact_size(292.0).show_separator_line(false).frame(side(18)).show(ui, |ui| {
             versions::show(ui, &self.versions, self.current_version, self.current.is_some(), now, &mut actions);
         });
         let progress = self.player.progress();

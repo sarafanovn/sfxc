@@ -92,8 +92,8 @@ pub fn button(ui: &mut Ui, kind: Kind, icon: Option<&str>, text: &str) -> Respon
         None => text.to_string(),
     };
     let galley = ui.painter().layout_no_wrap(label, font, Color32::PLACEHOLDER);
-    let pad = if text.is_empty() { Vec2::splat(5.0) } else { Vec2::new(12.0, 5.0) };
-    let size = (galley.size() + pad * 2.0).max(Vec2::new(26.0, 28.0));
+    let pad = if text.is_empty() { Vec2::splat(8.0) } else { Vec2::new(18.0, 8.0) };
+    let size = (galley.size() + pad * 2.0).max(Vec2::new(36.0, 36.0));
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
     if ui.is_rect_visible(rect) {
         let m = Motion::of(ui, &resp);
@@ -229,7 +229,7 @@ pub fn section(ui: &mut Ui, key: &str, title: &str, header: impl FnOnce(&mut Ui)
 
 pub fn panel_header(ui: &mut Ui, title: &str, trailing: impl FnOnce(&mut Ui)) {
     ui.horizontal(|ui| {
-        ui.set_min_height(28.0);
+        ui.set_min_height(36.0);
         ui.label(RichText::new(title).text_style(TextStyle::Heading).color(palette(ui).text));
         ui.with_layout(Layout::right_to_left(Align::Center), trailing);
     });
@@ -414,23 +414,37 @@ pub fn age(secs: i64) -> String {
 
 /// Dialog body shared by the modals: title, content, right-aligned actions.
 pub fn dialog<R>(ui: &mut Ui, title: &str, body: impl FnOnce(&mut Ui), actions: impl FnOnce(&mut Ui) -> R) -> R {
-    ui.set_width(360.0);
+    ui.set_width(440.0);
+    ui.spacing_mut().item_spacing = Vec2::new(12.0, 10.0);
     ui.label(RichText::new(title).font(FontId::new(17.0, theme::semibold())).color(palette(ui).text));
     ui.add_space(10.0);
     body(ui);
-    ui.add_space(16.0);
+    ui.add_space(20.0);
     ui.with_layout(Layout::right_to_left(Align::Center), actions).inner
 }
 
 /// Paints a rounded rect behind a list row and returns its interaction.
 pub fn row_background(ui: &Ui, rect: Rect, resp: &Response, selected: bool) {
     let p = palette(ui);
-    let fill = if selected {
-        p.accent_soft
-    } else if resp.hovered() {
-        p.hover.gamma_multiply(0.7)
+    let radius = R_CONTROL as f32;
+    if selected {
+        material::recessed(ui.painter(), rect, radius, &p, 0.5);
+        ui.painter().rect_filled(rect, CornerRadius::same(R_CONTROL), p.accent_soft.gamma_multiply(0.55));
     } else {
-        return;
-    };
-    ui.painter().rect_filled(rect, CornerRadius::same(R_CONTROL), fill);
+        let m = Motion::of(ui, resp);
+        if m.hover > 0.01 {
+            material::raised(ui.painter(), rect, radius, &p, &Motion { near: 0.0, pointer: None, ..m });
+        }
+    }
+}
+
+/// Sunken area that holds a list; content is inset so row shadows stay inside.
+pub fn list_well(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
+    let p = palette(ui);
+    let rect = ui.available_rect_before_wrap();
+    material::recessed(ui.painter(), rect, R_CARD as f32, &p, 0.55);
+    let inner = rect.shrink2(Vec2::new(10.0, 10.0));
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(*ui.layout()));
+    add(&mut child);
+    ui.advance_cursor_after_rect(rect);
 }

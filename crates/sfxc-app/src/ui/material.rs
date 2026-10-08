@@ -112,8 +112,10 @@ pub fn accent_edge(painter: &Painter, rect: Rect, radius: f32, p: &Palette, t: f
 pub fn raised(painter: &Painter, rect: Rect, radius: f32, p: &Palette, m: &Motion) {
     let e = (0.6 + 0.25 * m.near + 0.4 * m.hover) * (1.0 - m.press);
     if e > 0.0 {
-        let d = (4.0 * e).round() as i8;
-        let blur = (8.0 + 10.0 * e) as u8;
+        // Small controls get small shadows, so they stay inside the gap around them.
+        let k = (rect.size().min_elem() / 44.0).clamp(0.45, 1.0);
+        let d = ((4.0 * e * k).round() as i8).max(1);
+        let blur = ((8.0 + 10.0 * e) * k) as u8;
         painter.add(Shadow { offset: [-d, -d], blur, spread: 0, color: p.shadow_light }.as_shape(rect, radius));
         painter.add(Shadow { offset: [d, d], blur, spread: 0, color: p.shadow_dark }.as_shape(rect, radius));
     }

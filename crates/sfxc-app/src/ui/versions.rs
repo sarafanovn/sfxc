@@ -22,6 +22,7 @@ pub fn show(ui: &mut egui::Ui, versions: &[VersionInfo], current: Option<i64>, h
         empty_state(ui, icon::CLOCK_COUNTER_CLOCKWISE, "No history", "Versions of the open sound appear here.", |_| {});
         return;
     }
+    widgets::list_well(ui, |ui| {
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         let total = versions.len();
         entry(ui, true, total == 0, |ui| {
@@ -36,6 +37,7 @@ pub fn show(ui: &mut egui::Ui, versions: &[VersionInfo], current: Option<i64>, h
             let hovered = ui.rect_contains_pointer(rect);
             ui.data_mut(|d| d.insert_temp(hover_id, hovered));
         }
+    });
     });
 }
 

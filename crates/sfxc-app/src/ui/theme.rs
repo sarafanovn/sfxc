@@ -273,9 +273,9 @@ fn style(p: &Palette, dark: bool) -> egui::Style {
     ]
     .into();
     let sp = &mut s.spacing;
-    sp.item_spacing = egui::vec2(8.0, 6.0);
-    sp.button_padding = egui::vec2(10.0, 5.0);
-    sp.interact_size.y = 26.0;
+    sp.item_spacing = egui::vec2(12.0, 8.0);
+    sp.button_padding = egui::vec2(14.0, 7.0);
+    sp.interact_size.y = 30.0;
     sp.window_margin = Margin::same(20);
     sp.menu_margin = Margin::same(6);
     sp.slider_rail_height = 4.0;

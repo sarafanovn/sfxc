@@ -63,9 +63,9 @@ pub fn show(ui: &mut egui::Ui, effects: &mut Vec<Effect>, next_id: u64) {
     let mut op = None;
     let n = effects.len();
     egui::ScrollArea::horizontal().id_salt("fx_chain").auto_shrink([false, true]).show(ui, |ui| {
-        let (area, _) = ui.allocate_exact_size(vec2((n + 1) as f32 * SLOT + 12.0, CARD_H + 16.0), Sense::hover());
-        let left = area.left() + 6.0;
-        let slot = |i: usize| Rect::from_min_size(Pos2::new(left + i as f32 * SLOT, area.top() + 6.0), vec2(CARD_W, CARD_H));
+        let (area, _) = ui.allocate_exact_size(vec2((n + 1) as f32 * SLOT + 24.0, CARD_H + 40.0), Sense::hover());
+        let left = area.left() + 12.0;
+        let slot = |i: usize| Rect::from_min_size(Pos2::new(left + i as f32 * SLOT, area.top() + 16.0), vec2(CARD_W, CARD_H));
         let pointer = ui.ctx().pointer_interact_pos();
         if let Some(d) = drag.as_mut() {
             d.left = left;
