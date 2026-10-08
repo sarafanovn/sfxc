@@ -11,6 +11,8 @@ const ROW_H: f32 = 46.0;
 pub struct Prefs {
     pub theme: ThemeChoice,
     pub scale: f32,
+    /// Playback amplitude, 0..=1. Not part of any sound.
+    pub volume: f32,
 }
 
 pub fn show(

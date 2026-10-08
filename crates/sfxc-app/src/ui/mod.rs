@@ -17,7 +17,7 @@ use sfxc_core::export::export_to_path;
 use sfxc_core::generators::{self, Category};
 use sfxc_core::patch::{Mode, SoundPatch};
 
-use crate::audio::Player;
+use crate::audio::{self, Player};
 use crate::history::History;
 use crate::render_worker::{RenderJob, RenderResult, RenderWorker};
 use crate::store::{SoundSummary, Store, VersionInfo};
@@ -64,6 +64,7 @@ pub enum Action {
     Export,
     SetTheme(ThemeChoice),
     SetScale(f32),
+    SaveVolume,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -123,7 +124,7 @@ impl SfxcApp {
         let worker = RenderWorker::spawn(move || ctx.request_repaint());
         let mut app = Self {
             ctx: cc.egui_ctx.clone(),
-            prefs: Prefs { theme: ThemeChoice::Auto, scale: 1.0 },
+            prefs: Prefs { theme: ThemeChoice::Auto, scale: 1.0, volume: audio::DEFAULT_VOLUME },
             db_path,
             store: None,
             store_error: None,
@@ -168,6 +169,10 @@ impl SfxcApp {
         if let Some(s) = store.setting("ui_scale").ok().flatten().and_then(|v| v.parse::<f32>().ok()) {
             self.prefs.scale = theme::UI_SCALES.iter().map(|(v, _)| *v).find(|v| (v - s).abs() < 0.01).unwrap_or(1.0);
         }
+        if let Some(v) = store.setting("playback_volume").ok().flatten().and_then(|s| audio::parse_volume(&s)) {
+            self.prefs.volume = v;
+        }
+        self.player.set_volume(self.prefs.volume);
     }
 
     fn save_pref(&mut self, key: &str, value: &str) {
@@ -545,6 +550,10 @@ impl SfxcApp {
                 self.apply_prefs();
                 self.save_pref("ui_scale", &v.to_string());
             }
+            Action::SaveVolume => {
+                let v = self.prefs.volume.to_string();
+                self.save_pref("playback_volume", &v);
+            }
         }
     }
 
@@ -836,7 +845,8 @@ impl eframe::App for SfxcApp {
                     can_redo: self.history.can_redo(),
                     audio_error: self.player.error(),
                 };
-                editor::show(ui, cur, &view, &mut self.autoplay, &mut self.mode_note, &mut actions);
+                editor::show(ui, cur, &view, &mut self.autoplay, &mut self.prefs.volume, &mut self.mode_note, &mut actions);
+                self.player.set_volume(self.prefs.volume);
                 if cur.patch != snapshot {
                     before = Some(snapshot);
                 }

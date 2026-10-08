@@ -27,6 +27,7 @@ pub fn show(
     cur: &mut Current,
     view: &View,
     autoplay: &mut bool,
+    volume: &mut f32,
     mode_note: &mut Option<String>,
     actions: &mut Vec<Action>,
 ) {
@@ -38,7 +39,7 @@ pub fn show(
                 banner(ui, Tone::Warn, icon::SPEAKER_SLASH, &format!("{err}. Editing and export still work."), false);
                 ui.add_space(10.0);
             }
-            transport(ui, cur, view, autoplay, mode_note, actions);
+            transport(ui, cur, view, autoplay, volume, mode_note, actions);
             ui.add_space(12.0);
             generators(ui, actions);
             ui.add_space(16.0);
@@ -58,10 +59,18 @@ pub fn show(
                 envelope_card(ui, layer);
                 filter_card(ui, layer);
             }
+            output_card(ui, &mut cur.patch);
             ui.add_space(8.0);
             let next_id = cur.patch.next_effect_id();
             effects::show(ui, &mut cur.patch.master_effects, next_id);
         });
+    });
+}
+
+fn output_card(ui: &mut Ui, patch: &mut SoundPatch) {
+    let d = SoundPatch::default();
+    card(ui, "Output", |_| {}, |ui| {
+        param(ui, "Gain", &mut patch.master_volume, ranges::UNIT, d.master_volume, "", false);
     });
 }
 
@@ -113,7 +122,7 @@ fn header(ui: &mut Ui, cur: &mut Current, view: &View, actions: &mut Vec<Action>
     });
 }
 
-fn transport(ui: &mut Ui, cur: &mut Current, view: &View, autoplay: &mut bool, mode_note: &mut Option<String>, actions: &mut Vec<Action>) {
+fn transport(ui: &mut Ui, cur: &mut Current, view: &View, autoplay: &mut bool, volume: &mut f32, mode_note: &mut Option<String>, actions: &mut Vec<Action>) {
     card_frame(ui).show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {
@@ -138,9 +147,14 @@ fn transport(ui: &mut Ui, cur: &mut Current, view: &View, autoplay: &mut bool, m
             toggle(ui, autoplay, "Auto-play").on_hover_text("Play after every change");
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.spacing_mut().slider_width = 120.0;
-                let r = accent_slider(ui, egui::Slider::new(&mut cur.patch.master_volume, ranges::UNIT.0..=ranges::UNIT.1).show_value(false));
+                let mut pos = crate::audio::slider_from_volume(*volume);
+                let r = accent_slider(ui, egui::Slider::new(&mut pos, 0.0..=1.0).show_value(false));
                 if r.double_clicked() {
-                    cur.patch.master_volume = 0.8;
+                    pos = crate::audio::slider_from_volume(crate::audio::DEFAULT_VOLUME);
+                }
+                *volume = crate::audio::volume_from_slider(pos);
+                if r.drag_stopped() || (r.changed() && !r.dragged()) || r.double_clicked() {
+                    actions.push(Action::SaveVolume);
                 }
                 ui.label(RichText::new(icon::SPEAKER_HIGH).color(palette(ui).muted).size(16.0)).on_hover_text("Volume");
             });

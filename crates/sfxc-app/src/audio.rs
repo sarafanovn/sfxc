@@ -1,7 +1,7 @@
 //! Plays rendered buffers on the default output device via CoreAudio (cpal).
 //! A missing or lost device never blocks editing; we retry every few seconds.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -9,6 +9,23 @@ use anyhow::{bail, Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
 const RETRY_EVERY: Duration = Duration::from_secs(3);
+
+/// Playback volume (amplitude) when nothing is stored yet.
+pub const DEFAULT_VOLUME: f32 = 0.8;
+
+/// Slider position (0..1) → amplitude. Squared so the lower half of the slider stays usable.
+pub fn volume_from_slider(pos: f32) -> f32 {
+    pos.clamp(0.0, 1.0).powi(2)
+}
+
+pub fn slider_from_volume(amp: f32) -> f32 {
+    amp.clamp(0.0, 1.0).sqrt()
+}
+
+/// Parses a stored volume; garbage and NaN are rejected, out-of-range values clamped.
+pub fn parse_volume(s: &str) -> Option<f32> {
+    s.trim().parse::<f32>().ok().filter(|v| v.is_finite()).map(|v| v.clamp(0.0, 1.0))
+}
 
 struct Playback {
     samples: Arc<Vec<f32>>,
@@ -19,6 +36,7 @@ pub struct Player {
     stream: Option<cpal::Stream>,
     state: Arc<Mutex<Option<Playback>>>,
     failed: Arc<AtomicBool>,
+    volume: Arc<AtomicU32>,
     sample_rate: u32,
     error: Option<String>,
     last_attempt: Instant,
@@ -30,6 +48,7 @@ impl Player {
             stream: None,
             state: Arc::new(Mutex::new(None)),
             failed: Arc::new(AtomicBool::new(false)),
+            volume: Arc::new(AtomicU32::new(DEFAULT_VOLUME.to_bits())),
             sample_rate: 48_000,
             error: None,
             last_attempt: Instant::now(),
@@ -64,6 +83,7 @@ impl Player {
         let sample_rate = config.sample_rate;
         let state = self.state.clone();
         let failed = self.failed.clone();
+        let volume = self.volume.clone();
         failed.store(false, Ordering::SeqCst);
         let stream = device.build_output_stream::<f32, _, _>(
             config,
@@ -73,6 +93,7 @@ impl Player {
                     out.fill(0.0);
                     return;
                 };
+                let gain = f32::from_bits(volume.load(Ordering::Relaxed));
                 for frame in out.chunks_mut(channels) {
                     let v = match guard.as_mut() {
                         Some(pb) if pb.pos < pb.samples.len() => {
@@ -81,7 +102,7 @@ impl Player {
                         }
                         _ => 0.0,
                     };
-                    frame.fill(v);
+                    frame.fill(v * gain);
                 }
             },
             move |err| {
@@ -103,6 +124,11 @@ impl Player {
 
     pub fn error(&self) -> Option<&str> {
         self.error.as_deref()
+    }
+
+    /// Output gain applied while playing; takes effect immediately, also mid-sound.
+    pub fn set_volume(&self, amp: f32) {
+        self.volume.store(amp.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
     }
 
     pub fn is_available(&self) -> bool {
@@ -131,5 +157,28 @@ impl Player {
         if self.stream.is_none() && self.last_attempt.elapsed() >= RETRY_EVERY {
             self.connect();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn slider_curve_round_trips() {
+        for pos in [0.0, 0.25, 0.5, 0.9, 1.0] {
+            assert!((slider_from_volume(volume_from_slider(pos)) - pos).abs() < 1e-5);
+        }
+        assert_eq!(volume_from_slider(0.5), 0.25);
+        assert_eq!(volume_from_slider(2.0), 1.0);
+    }
+
+    #[test]
+    fn parse_volume_rejects_garbage_and_clamps() {
+        assert_eq!(parse_volume("0.5"), Some(0.5));
+        assert_eq!(parse_volume("5"), Some(1.0));
+        assert_eq!(parse_volume("-1"), Some(0.0));
+        assert_eq!(parse_volume("abc"), None);
+        assert_eq!(parse_volume("NaN"), None);
     }
 }
