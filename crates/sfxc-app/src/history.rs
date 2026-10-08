@@ -1,38 +1,40 @@
 //! In-memory undo/redo for the open sound. Independent of saved versions.
 
+use std::collections::VecDeque;
+
 use sfxc_core::patch::SoundPatch;
 
 pub struct History {
-    undo: Vec<SoundPatch>,
+    undo: VecDeque<SoundPatch>,
     redo: Vec<SoundPatch>,
     limit: usize,
 }
 
 impl History {
     pub fn new(limit: usize) -> Self {
-        Self { undo: Vec::new(), redo: Vec::new(), limit }
+        Self { undo: VecDeque::new(), redo: Vec::new(), limit }
     }
 
     pub fn push(&mut self, before: SoundPatch) {
-        if self.undo.last() == Some(&before) {
+        if self.undo.back() == Some(&before) {
             return;
         }
-        self.undo.push(before);
+        self.undo.push_back(before);
         if self.undo.len() > self.limit {
-            self.undo.remove(0);
+            self.undo.pop_front();
         }
         self.redo.clear();
     }
 
     pub fn undo(&mut self, current: &SoundPatch) -> Option<SoundPatch> {
-        let prev = self.undo.pop()?;
+        let prev = self.undo.pop_back()?;
         self.redo.push(current.clone());
         Some(prev)
     }
 
     pub fn redo(&mut self, current: &SoundPatch) -> Option<SoundPatch> {
         let next = self.redo.pop()?;
-        self.undo.push(current.clone());
+        self.undo.push_back(current.clone());
         Some(next)
     }
 

@@ -1,11 +1,12 @@
 //! Background rendering. Requests are coalesced: only the newest pending job is rendered.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::thread;
 
 use sfxc_core::patch::SoundPatch;
-use sfxc_core::render::render;
+use sfxc_core::render::render_cancellable;
 
 pub struct RenderJob {
     pub generation: u64,
@@ -26,9 +27,9 @@ pub struct RenderResult {
 }
 
 /// Linear-interpolation resampling. Good enough for previewing: the band limit of the rendered rate survives.
-pub fn resample(samples: &[f32], from: u32, to: u32) -> Vec<f32> {
+pub fn resample(samples: Vec<f32>, from: u32, to: u32) -> Vec<f32> {
     if from == to || samples.is_empty() {
-        return samples.to_vec();
+        return samples;
     }
     let step = from as f64 / to as f64;
     let n = ((samples.len() as f64) / step).round() as usize;
@@ -47,12 +48,15 @@ pub fn resample(samples: &[f32], from: u32, to: u32) -> Vec<f32> {
 pub struct RenderWorker {
     jobs: Sender<RenderJob>,
     results: Receiver<RenderResult>,
+    newest: Arc<AtomicU64>,
 }
 
 impl RenderWorker {
     pub fn spawn(notify: impl Fn() + Send + 'static) -> Self {
         let (jobs, job_rx) = mpsc::channel::<RenderJob>();
         let (result_tx, results) = mpsc::channel();
+        let newest = Arc::new(AtomicU64::new(0));
+        let latest = newest.clone();
         thread::Builder::new()
             .name("sfxc-render".into())
             .spawn(move || {
@@ -60,7 +64,9 @@ impl RenderWorker {
                     while let Ok(newer) = job_rx.try_recv() {
                         job = newer;
                     }
-                    let samples = Arc::new(resample(&render(&job.patch, job.sample_rate), job.sample_rate, job.play_rate));
+                    let stale = || latest.load(Ordering::Relaxed) != job.generation;
+                    let Some(rendered) = render_cancellable(&job.patch, job.sample_rate, &stale) else { continue };
+                    let samples = Arc::new(resample(rendered, job.sample_rate, job.play_rate));
                     let result =
                         RenderResult { generation: job.generation, sample_rate: job.play_rate, render_rate: job.sample_rate, samples };
                     if result_tx.send(result).is_err() {
@@ -70,10 +76,11 @@ impl RenderWorker {
                 }
             })
             .expect("spawn render thread");
-        Self { jobs, results }
+        Self { jobs, results, newest }
     }
 
     pub fn request(&self, job: RenderJob) {
+        self.newest.store(job.generation, Ordering::Relaxed);
         let _ = self.jobs.send(job);
     }
 
@@ -116,11 +123,11 @@ mod tests {
     #[test]
     fn resample_keeps_duration_and_shape() {
         let src: Vec<f32> = (0..22_050).map(|i| (i as f32 / 22_050.0 * std::f32::consts::TAU * 10.0).sin()).collect();
-        let out = resample(&src, 22_050, 48_000);
+        let out = resample(src.clone(), 22_050, 48_000);
         assert_eq!(out.len(), 48_000);
         // A quarter of the way through each 1/10 s cycle the sine peaks.
         assert!((out[1_200] - 1.0).abs() < 0.01, "got {}", out[1_200]);
-        assert_eq!(resample(&src, 44_100, 44_100).len(), src.len());
-        assert!(resample(&[], 22_050, 48_000).is_empty());
+        assert_eq!(resample(src.clone(), 44_100, 44_100).len(), src.len());
+        assert!(resample(Vec::new(), 22_050, 48_000).is_empty());
     }
 }

@@ -19,6 +19,7 @@ pub const SETTINGS_ORDER: &str = "settings_order";
 /// Read-only state the editor shows but does not own.
 pub struct View<'a> {
     pub rendered: Option<(&'a [f32], u32)>,
+    pub rendered_generation: u64,
     pub progress: Option<f32>,
     pub can_undo: bool,
     pub can_redo: bool,
@@ -215,7 +216,7 @@ fn transport(
             });
             ui.add_space(6.0);
             ui.vertical(|ui| {
-                waveform(ui, view.rendered, view.progress, 92.0, export.fixed_length.then_some(export.seconds));
+                waveform(ui, view.rendered, view.rendered_generation, view.progress, 92.0, export.fixed_length.then_some(export.seconds));
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 10.0;

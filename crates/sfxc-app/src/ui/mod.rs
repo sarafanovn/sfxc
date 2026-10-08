@@ -861,6 +861,7 @@ impl eframe::App for SfxcApp {
                 let rate = self.export_settings.sample_rate;
                 let view = editor::View {
                     rendered: self.rendered.as_ref().map(|r| (r.samples.as_slice(), r.sample_rate)),
+                    rendered_generation: self.rendered.as_ref().map_or(0, |r| r.generation),
                     progress,
                     can_undo: self.history.can_undo(),
                     can_redo: self.history.can_redo(),
@@ -986,6 +987,7 @@ mod render_smoke {
             egui::CentralPanel::default().show(ui, |ui| {
                 let view = editor::View {
                     rendered: Some((samples.as_slice(), 48_000)),
+                    rendered_generation: 1,
                     progress: None,
                     can_undo: false,
                     can_redo: false,
@@ -1184,6 +1186,7 @@ mod render_smoke {
                     egui::CentralPanel::default().show(ui, |ui| {
                         let view = editor::View {
                             rendered: Some((samples.as_slice(), 48_000)),
+                    rendered_generation: 1,
                             progress: Some(0.3),
                             can_undo: false,
                             can_redo: false,

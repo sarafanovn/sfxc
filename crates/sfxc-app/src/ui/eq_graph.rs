@@ -71,22 +71,6 @@ pub fn smooth_curve(gains: &[f32; BANDS], per_segment: usize) -> Vec<(f32, f32)>
     out
 }
 
-/// Lets tests find the draggable points drawn in the last frame.
-#[cfg(test)]
-pub mod test_support {
-    use std::cell::RefCell;
-
-    use eframe::egui::Pos2;
-
-    thread_local! {
-        pub static POINTS: RefCell<Vec<Pos2>> = const { RefCell::new(Vec::new()) };
-    }
-
-    pub fn take_points() -> Vec<Pos2> {
-        POINTS.with(|p| std::mem::take(&mut *p.borrow_mut()))
-    }
-}
-
 /// The equalizer graph. Dragging inside a band's column sets its gain, double click resets it to 0.
 /// The response is marked changed when a gain moved.
 pub fn show(ui: &mut Ui, eq: &mut Equalizer) -> Response {
@@ -157,8 +141,6 @@ pub fn show(ui: &mut Ui, eq: &mut Equalizer) -> Response {
     // Points and, while a band is hovered or dragged, its value.
     for i in 0..BANDS {
         let c = Pos2::new(band_x(i, plot.left(), plot.right()), gain_to_y(eq.gains[i], plot.top(), plot.bottom()));
-        #[cfg(test)]
-        test_support::POINTS.with(|v| v.borrow_mut().push(c));
         let col = Rect::from_center_size(c, vec2(column_w, plot.height() + 16.0));
         let active = ui.rect_contains_pointer(col) || ui.ctx().is_being_dragged(Id::new(("eq_band", i)));
         painter.circle_filled(c, if active { 7.5 } else { 6.0 }, if enabled { Color32::WHITE } else { p.muted });

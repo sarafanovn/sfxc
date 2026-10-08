@@ -1,8 +1,9 @@
 //! Plays rendered buffers on the default output device via CoreAudio (cpal).
 //! A missing or lost device never blocks editing; we retry every few seconds.
 
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
@@ -27,14 +28,24 @@ pub fn parse_volume(s: &str) -> Option<f32> {
     s.trim().parse::<f32>().ok().filter(|v| v.is_finite()).map(|v| v.clamp(0.0, 1.0))
 }
 
-struct Playback {
-    samples: Arc<Vec<f32>>,
-    pos: usize,
+enum Command {
+    Play(Arc<Vec<f32>>),
+    Stop,
+}
+
+/// Playhead shared with the audio thread. `len` is 0 when nothing is queued.
+#[derive(Default)]
+struct Position {
+    pos: AtomicUsize,
+    len: AtomicUsize,
 }
 
 pub struct Player {
     stream: Option<cpal::Stream>,
-    state: Arc<Mutex<Option<Playback>>>,
+    commands: Option<Sender<Command>>,
+    position: Arc<Position>,
+    /// Buffers handed to the audio thread, kept here so it never frees memory itself.
+    sent: Vec<Arc<Vec<f32>>>,
     failed: Arc<AtomicBool>,
     volume: Arc<AtomicU32>,
     sample_rate: u32,
@@ -46,7 +57,9 @@ impl Player {
     pub fn new() -> Self {
         let mut p = Self {
             stream: None,
-            state: Arc::new(Mutex::new(None)),
+            commands: None,
+            position: Arc::default(),
+            sent: Vec::new(),
             failed: Arc::new(AtomicBool::new(false)),
             volume: Arc::new(AtomicU32::new(DEFAULT_VOLUME.to_bits())),
             sample_rate: 48_000,
@@ -59,20 +72,24 @@ impl Player {
 
     fn connect(&mut self) {
         self.last_attempt = Instant::now();
-        match self.build() {
+        self.position.len.store(0, Ordering::Relaxed);
+        let (tx, rx) = mpsc::channel();
+        match self.build(rx) {
             Ok((stream, sr)) => {
                 self.stream = Some(stream);
+                self.commands = Some(tx);
                 self.sample_rate = sr;
                 self.error = None;
             }
             Err(e) => {
                 self.stream = None;
+                self.commands = None;
                 self.error = Some(format!("Audio output unavailable: {e:#}"));
             }
         }
     }
 
-    fn build(&self) -> Result<(cpal::Stream, u32)> {
+    fn build(&self, commands: Receiver<Command>) -> Result<(cpal::Stream, u32)> {
         let device = cpal::default_host().default_output_device().context("no output device")?;
         let supported = device.default_output_config()?;
         if supported.sample_format() != cpal::SampleFormat::F32 {
@@ -81,29 +98,30 @@ impl Player {
         let config: cpal::StreamConfig = supported.into();
         let channels = config.channels as usize;
         let sample_rate = config.sample_rate;
-        let state = self.state.clone();
+        let position = self.position.clone();
+        let mut current: Option<Arc<Vec<f32>>> = None;
+        let mut pos = 0;
         let failed = self.failed.clone();
         let volume = self.volume.clone();
         failed.store(false, Ordering::SeqCst);
         let stream = device.build_output_stream::<f32, _, _>(
             config,
             move |out: &mut [f32], _| {
-                // Never block the audio thread: if the UI holds the lock, output silence.
-                let Ok(mut guard) = state.try_lock() else {
-                    out.fill(0.0);
-                    return;
-                };
-                let gain = f32::from_bits(volume.load(Ordering::Relaxed));
-                for frame in out.chunks_mut(channels) {
-                    let v = match guard.as_mut() {
-                        Some(pb) if pb.pos < pb.samples.len() => {
-                            pb.pos += 1;
-                            pb.samples[pb.pos - 1]
-                        }
-                        _ => 0.0,
+                for cmd in commands.try_iter() {
+                    current = match cmd {
+                        Command::Play(samples) => Some(samples),
+                        Command::Stop => None,
                     };
+                    pos = 0;
+                }
+                let gain = f32::from_bits(volume.load(Ordering::Relaxed));
+                let samples = current.as_deref().map_or(&[][..], Vec::as_slice);
+                for frame in out.chunks_mut(channels) {
+                    let v = samples.get(pos).copied().unwrap_or(0.0);
+                    pos = (pos + 1).min(samples.len());
                     frame.fill(v * gain);
                 }
+                position.pos.store(pos, Ordering::Relaxed);
             },
             move |err| {
                 eprintln!("audio stream error: {err}");
@@ -135,33 +153,47 @@ impl Player {
         self.stream.is_some()
     }
 
-    pub fn play(&self, samples: Arc<Vec<f32>>) {
-        if let Ok(mut g) = self.state.lock() {
-            *g = Some(Playback { samples, pos: 0 });
-        }
+    pub fn play(&mut self, samples: Arc<Vec<f32>>) {
+        self.position.pos.store(0, Ordering::Relaxed);
+        self.position.len.store(samples.len(), Ordering::Relaxed);
+        self.sent.push(samples.clone());
+        self.send(Command::Play(samples));
     }
 
     /// Stops playback immediately; the next `play` starts from the beginning.
-    pub fn stop(&self) {
-        if let Ok(mut g) = self.state.lock() {
-            *g = None;
+    pub fn stop(&mut self) {
+        self.position.pos.store(0, Ordering::Relaxed);
+        self.position.len.store(0, Ordering::Relaxed);
+        self.send(Command::Stop);
+    }
+
+    fn send(&mut self, cmd: Command) {
+        if let Some(tx) = &self.commands
+            && tx.send(cmd).is_err()
+        {
+            self.commands = None;
         }
+    }
+
+    fn playhead(&self) -> (usize, usize) {
+        (self.position.pos.load(Ordering::Relaxed), self.position.len.load(Ordering::Relaxed))
     }
 
     /// True while a buffer is queued and not yet played to the end.
     pub fn is_playing(&self) -> bool {
-        self.state.lock().ok().is_some_and(|g| g.as_ref().is_some_and(|pb| pb.pos < pb.samples.len()))
+        let (pos, len) = self.playhead();
+        pos < len
     }
 
     /// Fraction of the current buffer already played, while something is playing.
     pub fn progress(&self) -> Option<f32> {
-        let g = self.state.try_lock().ok()?;
-        let pb = g.as_ref()?;
-        (self.stream.is_some() && pb.pos < pb.samples.len()).then(|| pb.pos as f32 / pb.samples.len() as f32)
+        let (pos, len) = self.playhead();
+        (self.stream.is_some() && pos < len).then(|| pos as f32 / len as f32)
     }
 
     /// Call once per UI frame.
     pub fn maintain(&mut self) {
+        self.sent.retain(|b| Arc::strong_count(b) > 1);
         if self.failed.swap(false, Ordering::SeqCst) {
             self.stream = None;
             self.error = Some("Audio device lost, reconnecting…".into());
@@ -187,7 +219,7 @@ mod tests {
 
     #[test]
     fn stop_ends_playback() {
-        let p = Player::new();
+        let mut p = Player::new();
         assert!(!p.is_playing());
         // Long enough that a real device cannot finish it during the test.
         p.play(Arc::new(vec![0.1; 4_000_000]));

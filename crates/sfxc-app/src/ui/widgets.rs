@@ -579,7 +579,7 @@ pub fn play_button(ui: &mut Ui, playing: bool) -> Response {
 /// Filled waveform with a playhead. `progress` is the played fraction while audio runs.
 /// `axis_secs` fixes the length of the time axis (a fixed export length): the sound is cut or padded with
 /// silence to it, and the time label shows that length. `None` shows the sound's own length.
-pub fn waveform(ui: &mut Ui, rendered: Option<(&[f32], u32)>, progress: Option<f32>, height: f32, axis_secs: Option<f32>) {
+pub fn waveform(ui: &mut Ui, rendered: Option<(&[f32], u32)>, generation: u64, progress: Option<f32>, height: f32, axis_secs: Option<f32>) {
     let p = palette(ui);
     let (rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), height), Sense::hover());
     let painter = ui.painter_at(rect);
@@ -600,14 +600,9 @@ pub fn waveform(ui: &mut Ui, rendered: Option<(&[f32], u32)>, progress: Option<f
     let head_x = progress.map(|t| inner.left() + (t * own_secs / axis_secs).min(1.0) * inner.width());
     let played = p.accent;
     let unplayed = if progress.is_some() { p.accent.gamma_multiply(0.45) } else { p.accent.gamma_multiply(0.85) };
-    let mut shapes = Vec::with_capacity(cols);
-    for c in 0..cols {
-        let a = (c as f32 * per) as usize;
-        let b = (((c + 1) as f32 * per) as usize).min(samples.len());
-        if a >= b {
-            break;
-        }
-        let (lo, hi) = samples[a..b].iter().fold((0.0f32, 0.0f32), |(lo, hi), &v| (lo.min(v), hi.max(v)));
+    let peaks = column_peaks(ui, samples, generation, cols, per);
+    let mut shapes = Vec::with_capacity(peaks.len());
+    for (c, &(lo, hi)) in peaks.iter().enumerate() {
         let x = inner.left() + c as f32 + 0.5;
         let color = if head_x.is_some_and(|h| x <= h) { played } else { unplayed };
         let (top, bottom) = (mid - hi.clamp(-1.0, 1.0) * half, mid - lo.clamp(-1.0, 1.0) * half);
@@ -622,6 +617,28 @@ pub fn waveform(ui: &mut Ui, rendered: Option<(&[f32], u32)>, progress: Option<f
     let at = rect.right_bottom() - galley.size() - Vec2::new(8.0, 6.0);
     painter.rect_filled(Rect::from_min_size(at, galley.size()).expand2(Vec2::new(5.0, 2.0)), 4.0, p.well);
     painter.galley(at, galley, p.muted);
+}
+
+type PeakKey = (u64, usize, usize, u32);
+
+/// Min/max of each column, cached until the render or the layout changes.
+fn column_peaks(ui: &Ui, samples: &[f32], generation: u64, cols: usize, per: f32) -> std::sync::Arc<[(f32, f32)]> {
+    let key: PeakKey = (generation, samples.len(), cols, per.to_bits());
+    let id = ui.id().with("waveform_peaks");
+    if let Some((k, peaks)) = ui.data(|d| d.get_temp::<(PeakKey, std::sync::Arc<[(f32, f32)]>)>(id))
+        && k == key
+    {
+        return peaks;
+    }
+    let peaks: std::sync::Arc<[(f32, f32)]> = (0..cols)
+        .map_while(|c| {
+            let a = (c as f32 * per) as usize;
+            let b = (((c + 1) as f32 * per) as usize).min(samples.len());
+            (a < b).then(|| samples[a..b].iter().fold((0.0f32, 0.0f32), |(lo, hi), &v| (lo.min(v), hi.max(v))))
+        })
+        .collect();
+    ui.data_mut(|d| d.insert_temp(id, (key, peaks.clone())));
+    peaks
 }
 
 /// Human-readable age for timestamps in lists.
