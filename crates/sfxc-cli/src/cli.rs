@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use clap::{Parser, Subcommand, ValueEnum};
 use sfxc_core::generators::Category;
 use sfxc_core::patch::Mode;
@@ -63,6 +65,10 @@ pub enum Command {
     Versions { sound: String },
     /// Make an older version the current one; the current state is kept as a version first.
     Restore { sound: String, version: i64 },
+    /// Render to a file and remember it; later `export SOUND` or `export --linked` rewrites the same file.
+    Export(ExportArgs),
+    /// Duration, level, brightness and envelope of the rendered sound.
+    Analyze { sound: String },
 }
 
 #[derive(Subcommand)]
@@ -126,4 +132,42 @@ impl ModeArg {
             ModeArg::Bit16 => Mode::Bit16,
         }
     }
+}
+
+#[derive(clap::Args)]
+pub struct ExportArgs {
+    /// Sound to export; omit with --linked.
+    #[arg(required_unless_present = "linked", conflicts_with = "linked")]
+    pub sound: Option<String>,
+    /// Re-export every sound that has an export link.
+    #[arg(long)]
+    pub linked: bool,
+    /// Target file; relative paths resolve against the current directory. Sets the sound's export link.
+    #[arg(long)]
+    pub to: Option<PathBuf>,
+    /// Default: from the file extension.
+    #[arg(long, value_enum, requires = "to")]
+    pub format: Option<FormatArg>,
+    /// WAV depth 8, 16 or 24. Default: from the sound's mode.
+    #[arg(long, requires = "to")]
+    pub bits: Option<u16>,
+    /// OGG quality 0–10. Default: 6.
+    #[arg(long, requires = "to")]
+    pub quality: Option<f32>,
+    /// Sample rate. Default: 44100.
+    #[arg(long, requires = "to")]
+    pub rate: Option<u32>,
+    /// Exact length in seconds; cut with a fade or padded with silence.
+    #[arg(long, requires = "to")]
+    pub length: Option<f32>,
+    #[arg(long, requires = "to")]
+    pub no_normalize: bool,
+    #[arg(long, requires = "to")]
+    pub no_trim: bool,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum FormatArg {
+    Wav,
+    Ogg,
 }

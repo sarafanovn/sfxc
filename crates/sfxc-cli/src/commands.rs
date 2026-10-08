@@ -2,12 +2,15 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
+use sfxc_core::analyze::analyze;
+use sfxc_core::export::{export_to_path, wav_bits, ExportFormat, ExportOptions, TRIM_THRESHOLD};
 use sfxc_core::generators::{generate, mutate};
-use sfxc_core::patch::{Effect, EffectKind, SoundPatch};
+use sfxc_core::patch::{Effect, EffectKind, Mode, SoundPatch};
 use sfxc_core::patch_edit::{apply_assignments, unknown_keys};
-use sfxc_store::Store;
+use sfxc_core::render::{render, trim_tail};
+use sfxc_store::{ExportLink, Store};
 
-use crate::cli::{Command, FxCommand};
+use crate::cli::{Command, ExportArgs, FormatArg, FxCommand};
 
 pub struct Ctx {
     pub now: i64,
@@ -102,6 +105,13 @@ pub fn run(store: &Store, command: Command, ctx: &Ctx) -> Result<Value> {
             }
             store.restore_version(id, version, ctx.now)?;
             show(store, id)
+        }
+        Command::Export(args) => export(store, ctx, &args),
+        Command::Analyze { sound } => {
+            let id = store.find_sound(&sound)?;
+            let mut samples = render(&store.load_draft(id)?, ANALYZE_RATE);
+            trim_tail(&mut samples, TRIM_THRESHOLD);
+            Ok(json!({ "id": id, "analysis": analyze(&samples, ANALYZE_RATE) }))
         }
     }
 }
@@ -199,6 +209,85 @@ fn fx_add(store: &Store, ctx: &Ctx, sound: &str, name: &str, layer: Option<usize
     Ok(json!({ "id": id, "version_id": version_id, "effect_id": fx_id, "path": format!("{prefix}.{at}") }))
 }
 
+const ANALYZE_RATE: u32 = 44_100;
+/// Same default as the app's export dialog.
+const DEFAULT_OGG_QUALITY: f32 = 6.0;
+
+fn export(store: &Store, ctx: &Ctx, args: &ExportArgs) -> Result<Value> {
+    if args.linked {
+        return export_linked(store, ctx);
+    }
+    let id = store.find_sound(args.sound.as_deref().context("name a sound or pass --linked")?)?;
+    let link = match &args.to {
+        Some(to) => {
+            let path = std::path::absolute(ctx.cwd.join(to)).with_context(|| format!("bad path {}", to.display()))?;
+            ExportLink { path: path.to_string_lossy().into_owned(), options: options_from(args, &path, store.load_draft(id)?.mode)? }
+        }
+        None => store
+            .export_link(id)?
+            .with_context(|| format!("sound {id} has no export link yet; run `sfxc-cli export {id} --to FILE` once"))?,
+    };
+    let version_id = export_one(store, id, &link, ctx.now)?;
+    store.set_export_link(id, &link)?;
+    Ok(json!({ "id": id, "version_id": version_id, "path": link.path, "export_link": link }))
+}
+
+fn options_from(args: &ExportArgs, path: &Path, mode: Mode) -> Result<ExportOptions> {
+    let format = match args.format {
+        Some(f) => f,
+        None => match path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref() {
+            Some("wav") => FormatArg::Wav,
+            Some("ogg") => FormatArg::Ogg,
+            _ => bail!("cannot tell the format from `{}`; add --format wav or --format ogg", path.display()),
+        },
+    };
+    let defaults = ExportOptions::default();
+    Ok(ExportOptions {
+        format: match format {
+            FormatArg::Wav => ExportFormat::Wav { bits: args.bits.unwrap_or(wav_bits(mode)) },
+            FormatArg::Ogg => ExportFormat::Ogg { quality: args.quality.unwrap_or(DEFAULT_OGG_QUALITY) },
+        },
+        sample_rate: args.rate.unwrap_or(defaults.sample_rate),
+        normalize: !args.no_normalize,
+        trim: !args.no_trim,
+        duration: args.length,
+    })
+}
+
+/// Writes the draft to the link's file, then records the export on a version.
+fn export_one(store: &Store, id: i64, link: &ExportLink, now: i64) -> Result<i64> {
+    let patch = store.load_draft(id)?;
+    let path = Path::new(&link.path);
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).with_context(|| format!("cannot create {}", dir.display()))?;
+    }
+    export_to_path(&patch, &link.options, path)?;
+    let version_id = save(store, id, &patch, "export", now)?;
+    store.mark_exported(version_id, now)?;
+    Ok(version_id)
+}
+
+fn export_linked(store: &Store, ctx: &Ctx) -> Result<Value> {
+    let mut results = Vec::new();
+    let mut failed = 0;
+    for id in store.linked_sounds()? {
+        let name = store.sound_meta(id).map(|m| m.0).unwrap_or_default();
+        let r = store.export_link(id).and_then(|link| {
+            let link = link.context("the export link disappeared")?;
+            export_one(store, id, &link, ctx.now)?;
+            Ok(link.path)
+        });
+        match r {
+            Ok(path) => results.push(json!({ "id": id, "name": name, "ok": true, "path": path })),
+            Err(e) => {
+                failed += 1;
+                results.push(json!({ "id": id, "name": name, "ok": false, "error": format!("{e:#}") }));
+            }
+        }
+    }
+    Ok(json!({ "exported": results.len() - failed, "failed": failed, "results": results }))
+}
+
 pub(crate) fn attach_warnings(out: &mut Value, warnings: Vec<String>) {
     if !warnings.is_empty() {
         out["warnings"] = json!(warnings);
@@ -208,7 +297,7 @@ pub(crate) fn attach_warnings(out: &mut Value, warnings: Vec<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli::{CategoryArg, FxCommand, ModeArg};
+    use crate::cli::{CategoryArg, ExportArgs, FxCommand, ModeArg};
 
     pub(crate) fn temp_dir(name: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("sfxc-cli-{}-{name}", std::process::id()));
@@ -381,5 +470,88 @@ mod tests {
         run(&s, Command::Rename { sound: "b".into(), name: "b".into() }, &c).unwrap();
         run(&s, Command::Rename { sound: "b".into(), name: "c".into() }, &c).unwrap();
         assert!(s.find_sound("c").is_ok());
+    }
+
+    fn export_args(sound: Option<&str>, to: Option<&str>) -> ExportArgs {
+        ExportArgs {
+            sound: sound.map(Into::into),
+            linked: sound.is_none(),
+            to: to.map(PathBuf::from),
+            format: None,
+            bits: None,
+            quality: None,
+            rate: None,
+            length: None,
+            no_normalize: false,
+            no_trim: false,
+        }
+    }
+
+    #[test]
+    fn export_links_an_absolute_path_and_reexports_from_anywhere() {
+        let project = temp_dir("project");
+        let elsewhere = temp_dir("elsewhere");
+        let s = Store::open_in_memory().unwrap();
+        let id = new_jump(&s, &ctx(&project), "jump");
+        let out = run(&s, Command::Export(export_args(Some("jump"), Some("sfx/jump.wav"))), &ctx(&project)).unwrap();
+        let file = project.join("sfx/jump.wav");
+        assert!(file.metadata().unwrap().len() > 100);
+        let link = s.export_link(id).unwrap().unwrap();
+        assert!(Path::new(&link.path).is_absolute());
+        assert_eq!(out["path"], json!(link.path));
+        assert_eq!(link.options.format, ExportFormat::Wav { bits: 24 });
+
+        std::fs::remove_file(&file).unwrap();
+        run(&s, Command::Export(export_args(Some("jump"), None)), &ctx(&elsewhere)).unwrap();
+        assert!(file.exists(), "re-export writes the linked file, not one under the current directory");
+        assert!(s.list_versions(id).unwrap()[0].exported_at.is_some());
+    }
+
+    #[test]
+    fn export_keeps_a_persons_note() {
+        let dir = temp_dir("note");
+        let s = Store::open_in_memory().unwrap();
+        let id = new_jump(&s, &ctx(&dir), "jump");
+        s.commit_version(id, "final", 150).unwrap();
+        run(&s, Command::Export(export_args(Some("jump"), Some("a.ogg"))), &ctx(&dir)).unwrap();
+        assert_eq!(notes(&s, id), vec!["final"]);
+        assert!(dir.join("a.ogg").exists());
+    }
+
+    #[test]
+    fn export_without_a_link_or_with_an_unknown_extension_fails() {
+        let dir = temp_dir("nolink");
+        let s = Store::open_in_memory().unwrap();
+        new_jump(&s, &ctx(&dir), "jump");
+        let e = run(&s, Command::Export(export_args(Some("jump"), None)), &ctx(&dir)).unwrap_err().to_string();
+        assert!(e.contains("--to"), "{e}");
+        let e = run(&s, Command::Export(export_args(Some("jump"), Some("a.mp3"))), &ctx(&dir)).unwrap_err().to_string();
+        assert!(e.contains("--format"), "{e}");
+    }
+
+    #[test]
+    fn export_linked_reports_each_sound_and_counts_failures() {
+        let dir = temp_dir("linked");
+        let s = Store::open_in_memory().unwrap();
+        let c = ctx(&dir);
+        new_jump(&s, &c, "good");
+        let bad = new_jump(&s, &c, "bad");
+        run(&s, Command::Export(export_args(Some("good"), Some("good.wav"))), &c).unwrap();
+        std::fs::write(dir.join("not-a-dir"), b"x").unwrap();
+        let broken = ExportLink { path: dir.join("not-a-dir/bad.wav").to_string_lossy().into_owned(), options: ExportOptions::default() };
+        s.set_export_link(bad, &broken).unwrap();
+        let out = run(&s, Command::Export(export_args(None, None)), &c).unwrap();
+        assert_eq!((out["exported"].clone(), out["failed"].clone()), (json!(1), json!(1)));
+        let failed: Vec<&Value> = out["results"].as_array().unwrap().iter().filter(|r| r["ok"] == json!(false)).collect();
+        assert_eq!(failed[0]["name"], json!("bad"));
+    }
+
+    #[test]
+    fn analyze_describes_the_rendered_sound() {
+        let s = Store::open_in_memory().unwrap();
+        new_jump(&s, &ctx(&std::env::temp_dir()), "jump");
+        let out = run(&s, Command::Analyze { sound: "jump".into() }, &ctx(&std::env::temp_dir())).unwrap();
+        assert!(out["analysis"]["duration_s"].as_f64().unwrap() > 0.0);
+        assert_eq!(out["analysis"]["envelope"].as_array().unwrap().len(), 10);
     }
 }
