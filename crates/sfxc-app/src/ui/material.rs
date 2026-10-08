@@ -19,8 +19,6 @@ pub struct Motion {
 }
 
 impl Motion {
-    // Used by the effects chain (Task 9).
-    #[allow(dead_code)]
     pub const REST: Motion = Motion { hover: 0.0, press: 0.0, focus: 0.0, near: 0.0, pointer: None };
 
     pub fn of(ui: &Ui, resp: &Response) -> Self {

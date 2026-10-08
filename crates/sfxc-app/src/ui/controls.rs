@@ -134,7 +134,7 @@ pub fn track<N: Numeric>(ui: &mut Ui, v: &mut N, lo: N, hi: N, default: N, log: 
 }
 
 /// Rotary knob with label below and value shown on hover or drag.
-#[allow(clippy::too_many_arguments, dead_code)] // Used by the effects chain (Task 9).
+#[allow(clippy::too_many_arguments)]
 pub fn knob<N: Numeric>(ui: &mut Ui, label: &str, v: &mut N, lo: N, hi: N, default: N, suffix: &str, log: bool) -> Response {
     let p = palette(ui);
     let size = vec2(64.0, 76.0);

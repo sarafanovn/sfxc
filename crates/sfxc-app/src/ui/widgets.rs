@@ -29,18 +29,11 @@ pub fn param(ui: &mut Ui, label: &str, v: &mut f32, range: Range, default: f32, 
     param_row(ui, label, v, range.0, range.1, default, suffix, log)
 }
 
-/// Integer (or other numeric) variant of [`param`].
-pub fn param_num<N: Numeric>(ui: &mut Ui, label: &str, v: &mut N, lo: N, hi: N, default: N, suffix: &str) -> Response {
-    param_row(ui, label, v, lo, hi, default, suffix, false)
-}
-
 /// Rotary variant of [`param`] for compact layouts (effect cards).
-#[allow(dead_code)] // Used by the effects chain (Task 9).
 pub fn knob(ui: &mut Ui, label: &str, v: &mut f32, range: Range, default: f32, suffix: &str, log: bool) -> Response {
     controls::knob(ui, label, v, range.0, range.1, default, suffix, log)
 }
 
-#[allow(dead_code)] // Used by the effects chain (Task 9).
 pub fn knob_num<N: Numeric>(ui: &mut Ui, label: &str, v: &mut N, lo: N, hi: N, default: N, suffix: &str) -> Response {
     controls::knob(ui, label, v, lo, hi, default, suffix, false)
 }
