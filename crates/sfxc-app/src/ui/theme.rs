@@ -64,7 +64,7 @@ const fn rgb(hex: u32) -> Color32 {
 }
 
 pub const DARK: Palette = Palette {
-    chrome: rgb(0x1E2024),
+    chrome: rgb(0x25272C),
     canvas: rgb(0x25272C),
     surface: rgb(0x25272C),
     raised: rgb(0x2B2E34),
@@ -91,7 +91,7 @@ pub const DARK: Palette = Palette {
 };
 
 pub const LIGHT: Palette = Palette {
-    chrome: rgb(0xE1E4EA),
+    chrome: rgb(0xE8EBF0),
     canvas: rgb(0xE8EBF0),
     surface: rgb(0xE8EBF0),
     raised: rgb(0xEDF0F4),

@@ -8,6 +8,7 @@ mod effects;
 mod export_dialog;
 mod library;
 mod material;
+mod order;
 mod theme;
 mod versions;
 mod widgets;
@@ -87,6 +88,7 @@ pub enum Action {
     SetTheme(ThemeChoice),
     SetScale(f32),
     SaveVolume,
+    SaveSectionOrder(String),
     SetAccent { hue: f32, persist: bool },
 }
 
@@ -198,6 +200,10 @@ impl SfxcApp {
         }
         if let Some(h) = store.setting("accent_hue").ok().flatten().and_then(|s| accent::parse_hue(&s)) {
             self.prefs.accent_hue = h;
+        }
+        if let Some(saved) = store.setting("section_order").ok().flatten() {
+            let order = order::restore(&saved, &editor::SETTINGS);
+            self.ctx.data_mut(|d| d.insert_temp(egui::Id::new("settings_order"), order));
         }
         self.player.set_volume(self.prefs.volume);
     }
@@ -590,6 +596,7 @@ impl SfxcApp {
                     self.save_pref("accent_hue", &hue.to_string());
                 }
             }
+            Action::SaveSectionOrder(order) => self.save_pref("section_order", &order),
             Action::SaveVolume => {
                 let v = self.prefs.volume.to_string();
                 self.save_pref("playback_volume", &v);
@@ -979,6 +986,67 @@ mod render_smoke {
     #[test]
     fn editor_survives_pointer_with_effect_picker_open() {
         sweep(true);
+    }
+
+    fn frame(ctx: &egui::Context, cur: &mut Current, t: &mut f64, events: Vec<Event>, actions: &mut Vec<Action>) {
+        let samples = vec![0.1f32; 4800];
+        let (mut auto, mut vol, mut note) = (true, 0.8f32, None);
+        *t += 0.016;
+        let input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 1400.0))),
+            events,
+            time: Some(*t),
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(input, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                let view = editor::View {
+                    rendered: Some((samples.as_slice(), 48_000)),
+                    progress: None,
+                    can_undo: false,
+                    can_redo: false,
+                    audio_error: None,
+                };
+                editor::show(ui, cur, &view, &mut auto, &mut vol, &mut note, actions);
+            });
+        });
+        out.textures_delta.clear();
+    }
+
+    /// Dragging a card by its handle used to hit an egui assert (one widget in two layers in a frame).
+    #[test]
+    fn dragging_a_section_handle_reorders_without_panicking() {
+        use eframe::egui::PointerButton;
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let mut cur = Current {
+            id: 1,
+            name: "a".into(),
+            tags: String::new(),
+            patch: generators::generate(Category::PickupCoin, Mode::Modern, 3),
+            saved_json: String::new(),
+            changed_at: None,
+        };
+        let (mut t, mut actions) = (0.0, Vec::new());
+        frame(&ctx, &mut cur, &mut t, vec![], &mut actions);
+        widgets::test_support::take_grips();
+        frame(&ctx, &mut cur, &mut t, vec![], &mut actions);
+        let grips = widgets::test_support::take_grips();
+        assert!(grips.len() >= 5, "expected a handle per settings card, got {}", grips.len());
+        let start = grips[0].center();
+        let press = |pressed| Event::PointerButton { pos: start, button: PointerButton::Primary, pressed, modifiers: Default::default() };
+        frame(&ctx, &mut cur, &mut t, vec![Event::PointerMoved(start)], &mut actions);
+        frame(&ctx, &mut cur, &mut t, vec![press(true)], &mut actions);
+        let mut at = start;
+        for _ in 0..8 {
+            at.y += 45.0;
+            frame(&ctx, &mut cur, &mut t, vec![Event::PointerMoved(at)], &mut actions);
+        }
+        frame(&ctx, &mut cur, &mut t, vec![Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Default::default() }], &mut actions);
+        frame(&ctx, &mut cur, &mut t, vec![], &mut actions);
+        let saved = actions.iter().find_map(|a| if let Action::SaveSectionOrder(s) = a { Some(s.clone()) } else { None });
+        let saved = saved.expect("dropping on another card should save a new order");
+        assert!(!saved.starts_with("source,"), "source should have moved down, got {saved}");
     }
 
     fn sweep(picker_open: bool) {

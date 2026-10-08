@@ -1,4 +1,4 @@
-use eframe::egui::{self, Align, FontId, Frame, Layout, Margin, RichText, Ui};
+use eframe::egui::{self, vec2, Align, Align2, FontId, Frame, Id, Layout, Margin, Rect, RichText, Sense, Ui};
 use egui_phosphor::regular as icon;
 use sfxc_core::generators::Category;
 use sfxc_core::mode::{describe_mapping, map_source_to_mode, NES_DUTIES};
@@ -6,9 +6,14 @@ use sfxc_core::patch::*;
 
 use super::theme::{self, palette};
 use super::widgets::{
-    banner, row_label, button, icon_button, material_card, param, play_button, section, segmented, select, toggle, waveform, Kind, Tone,
+    banner, button, icon_button, material_card, material_card_response, param, play_button, row_label, section, segmented, select, toggle,
+    waveform, Grip, Kind, Tone,
 };
-use super::{arp, controls, effects, Action, Current};
+use super::{arp, controls, effects, order, Action, Current};
+
+/// Sound-settings cards, in their default order. The user can drag them into another order.
+pub const SETTINGS: [&str; 5] = ["source", "pitch", "arp", "envelope", "filter"];
+pub const SETTINGS_ORDER: &str = "settings_order";
 
 /// Read-only state the editor shows but does not own.
 pub struct View<'a> {
@@ -31,9 +36,10 @@ pub fn show(
     mode_note: &mut Option<String>,
     actions: &mut Vec<Action>,
 ) {
+    let panel = ui.max_rect();
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         let side = ((ui.available_width() - MAX_CONTENT) / 2.0).clamp(24.0, 127.0) as i8;
-        Frame::new().inner_margin(Margin { left: side, right: side, top: 16, bottom: 24 }).show(ui, |ui| {
+        Frame::new().inner_margin(Margin { left: side, right: side, top: 16, bottom: 96 }).show(ui, |ui| {
             ui.set_max_width(MAX_CONTENT);
             header(ui, cur, view, actions);
             ui.add_space(14.0);
@@ -41,30 +47,106 @@ pub fn show(
                 banner(ui, Tone::Warn, icon::SPEAKER_SLASH, &format!("{err}. Editing and export still work."), false);
                 ui.add_space(10.0);
             }
-            transport(ui, cur, view, autoplay, volume, mode_note, actions);
+            transport(ui, cur, view, autoplay, mode_note, actions);
             ui.add_space(12.0);
             generators(ui, actions);
             ui.add_space(16.0);
 
+            let order_id = Id::new(SETTINGS_ORDER);
+            let mut sections: Vec<String> = ui.data(|d| d.get_temp(order_id)).unwrap_or_else(|| order::restore("", &SETTINGS));
             let mode = cur.patch.mode;
             let layer = &mut cur.patch.layers[0];
-            source_section(ui, layer, mode);
-            pitch_section(ui, layer);
-            arp_section(ui, layer, view);
-            envelope_section(ui, layer);
-            filter_section(ui, layer);
-            output_section(ui, &mut cur.patch);
+            let mut moved = None;
+            for (i, key) in sections.iter().enumerate() {
+                let grip = Grip { group: "settings", index: i };
+                let drop = match key.as_str() {
+                    "source" => source_section(ui, layer, mode, grip),
+                    "pitch" => pitch_section(ui, layer, grip),
+                    "arp" => arp_section(ui, layer, view, grip),
+                    "envelope" => envelope_section(ui, layer, grip),
+                    _ => filter_section(ui, layer, grip),
+                };
+                moved = moved.or(drop);
+            }
+            if let Some((from, to)) = moved {
+                order::move_item(&mut sections, from, to);
+                actions.push(Action::SaveSectionOrder(order::save(&sections)));
+            }
+            ui.data_mut(|d| d.insert_temp(order_id, sections));
+
             ui.add_space(8.0);
             let next_id = cur.patch.next_effect_id();
             effects::show(ui, &mut cur.patch.master_effects, next_id);
         });
     });
+    dock(ui, panel, &mut cur.patch, volume, actions);
 }
 
-fn output_section(ui: &mut Ui, patch: &mut SoundPatch) {
-    let d = SoundPatch::default();
-    section(ui, "output", "Output", |_| {}, |ui| {
-        param(ui, "Gain", &mut patch.master_volume, ranges::UNIT, d.master_volume, "", false);
+/// Bottom-right corner: a small speaker that grows into Mutate, playback Volume and the sound's Gain
+/// while the pointer is over it.
+fn dock(ui: &mut Ui, panel: Rect, patch: &mut SoundPatch, volume: &mut f32, actions: &mut Vec<Action>) {
+    const OPEN_W: f32 = 270.0;
+    const ROW_H: f32 = 30.0;
+    let p = palette(ui);
+    let id = Id::new("dock");
+    let last: Option<(Rect, bool)> = ui.data(|d| d.get_temp(id.with("state")));
+    let pointer = ui.ctx().pointer_hover_pos();
+    let dragging = ui.input(|i| i.pointer.any_down());
+    // Stay open while a slider is being dragged even if the pointer leaves the card.
+    let open = last.is_some_and(|(rect, was_open)| pointer.is_some_and(|pt| rect.expand(10.0).contains(pt)) || (was_open && dragging));
+    let t = ui.ctx().animate_bool_with_time(id.with("t"), open, 0.18);
+    let rows_h = ROW_H * 2.0 + 8.0;
+    let w = egui::lerp(36.0..=OPEN_W, t);
+
+    let area = egui::Area::new(id)
+        .order(egui::Order::Foreground)
+        .pivot(Align2::RIGHT_BOTTOM)
+        .fixed_pos(panel.right_bottom() - vec2(28.0, 24.0))
+        .show(ui.ctx(), |ui| {
+            material_card_response(ui, |ui| {
+                ui.set_width(w);
+                if t > 0.02 {
+                    let (r, _) = ui.allocate_exact_size(vec2(w, rows_h * t), Sense::hover());
+                    let mut rows = ui.new_child(egui::UiBuilder::new().max_rect(Rect::from_min_size(r.min, vec2(w, rows_h))).layout(Layout::top_down(Align::LEFT)));
+                    rows.set_clip_rect(r.intersect(rows.clip_rect()));
+                    rows.set_opacity(t);
+                    dock_row(&mut rows, "Volume", w, |ui, width| {
+                        let mut pos = crate::audio::slider_from_volume(*volume);
+                        let default = crate::audio::slider_from_volume(crate::audio::DEFAULT_VOLUME);
+                        let r = controls::track(ui, &mut pos, 0.0, 1.0, default, false, width);
+                        *volume = crate::audio::volume_from_slider(pos);
+                        if r.drag_stopped() || (r.changed() && !r.dragged()) {
+                            actions.push(Action::SaveVolume);
+                        }
+                    });
+                    dock_row(&mut rows, "Gain", w, |ui, width| {
+                        let default = SoundPatch::default().master_volume;
+                        controls::track(ui, &mut patch.master_volume, ranges::UNIT.0, ranges::UNIT.1, default, false, width).on_hover_text("Level of this sound, saved with it");
+                    });
+                }
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.label(RichText::new(icon::SPEAKER_HIGH).color(p.muted).size(18.0));
+                    if t > 0.3 {
+                        ui.scope(|ui| {
+                            ui.set_opacity(t);
+                            if button(ui, Kind::Secondary, Some(icon::MAGIC_WAND), "Mutate").on_hover_text("Small random changes (M)").clicked() {
+                                actions.push(Action::Mutate);
+                            }
+                        });
+                    }
+                });
+            })
+        });
+    ui.data_mut(|d| d.insert_temp(id.with("state"), (area.inner.response.rect, open)));
+}
+
+fn dock_row(ui: &mut Ui, label: &str, total: f32, add: impl FnOnce(&mut Ui, f32)) {
+    const LABEL_W: f32 = 56.0;
+    ui.horizontal(|ui| {
+        ui.set_height(30.0);
+        ui.label(RichText::new(label).size(12.5).color(palette(ui).muted));
+        ui.add_space((LABEL_W - 40.0).max(0.0));
+        add(ui, (total - LABEL_W - ui.spacing().item_spacing.x * 2.0).max(60.0));
     });
 }
 
@@ -116,7 +198,7 @@ fn header(ui: &mut Ui, cur: &mut Current, view: &View, actions: &mut Vec<Action>
     });
 }
 
-fn transport(ui: &mut Ui, cur: &mut Current, view: &View, autoplay: &mut bool, volume: &mut f32, mode_note: &mut Option<String>, actions: &mut Vec<Action>) {
+fn transport(ui: &mut Ui, cur: &mut Current, view: &View, autoplay: &mut bool, mode_note: &mut Option<String>, actions: &mut Vec<Action>) {
     material_card(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {
@@ -139,16 +221,6 @@ fn transport(ui: &mut Ui, cur: &mut Current, view: &View, autoplay: &mut bool, v
             }
             ui.add_space(12.0);
             toggle(ui, autoplay, "Auto-play").on_hover_text("Play after every change");
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let mut pos = crate::audio::slider_from_volume(*volume);
-                let default = crate::audio::slider_from_volume(crate::audio::DEFAULT_VOLUME);
-                let r = controls::track(ui, &mut pos, 0.0, 1.0, default, false, 120.0);
-                *volume = crate::audio::volume_from_slider(pos);
-                if r.drag_stopped() || (r.changed() && !r.dragged()) {
-                    actions.push(Action::SaveVolume);
-                }
-                ui.label(RichText::new(icon::SPEAKER_HIGH).color(palette(ui).muted).size(16.0)).on_hover_text("Volume");
-            });
         });
     });
     if let Some(note) = mode_note.as_ref() {
@@ -183,9 +255,6 @@ fn generators(ui: &mut Ui, actions: &mut Vec<Action>) {
                 actions.push(Action::Generate(c));
             }
         }
-        if button(ui, Kind::Secondary, Some(icon::MAGIC_WAND), "Mutate").on_hover_text("Small random changes (M)").clicked() {
-            actions.push(Action::Mutate);
-        }
     });
 }
 
@@ -210,8 +279,8 @@ fn labeled(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui)) {
     });
 }
 
-fn source_section(ui: &mut Ui, layer: &mut Layer, mode: Mode) {
-    section(ui, "source", "Source", |_| {}, |ui| {
+fn source_section(ui: &mut Ui, layer: &mut Layer, mode: Mode, grip: Grip) -> Option<(usize, usize)> {
+    section(ui, "source", "Source", Some(grip), |_| {}, |ui| {
         let kinds: &[&'static str] = if mode == Mode::Bit8 { &["Pulse", "Triangle", "Noise"] } else { &Source::KIND_NAMES };
         let mut kind = layer.source.kind_name();
         labeled(ui, "Waveform", |ui| {
@@ -246,7 +315,7 @@ fn source_section(ui: &mut Ui, layer: &mut Layer, mode: Mode) {
             Source::Fm { algorithm, feedback, ops } => fm_controls(ui, algorithm, feedback, ops),
             _ => {}
         }
-    });
+    })
 }
 
 fn fm_controls(ui: &mut Ui, algorithm: &mut FmAlgorithm, feedback: &mut f32, ops: &mut [FmOperator; 4]) {
@@ -275,26 +344,26 @@ fn fm_controls(ui: &mut Ui, algorithm: &mut FmAlgorithm, feedback: &mut f32, ops
     }
 }
 
-fn pitch_section(ui: &mut Ui, layer: &mut Layer) {
+fn pitch_section(ui: &mut Ui, layer: &mut Layer, grip: Grip) -> Option<(usize, usize)> {
     let d = Pitch::default();
-    section(ui, "pitch", "Pitch", |_| {}, |ui| {
+    section(ui, "pitch", "Pitch", Some(grip), |_| {}, |ui| {
         let p = &mut layer.pitch;
         param(ui, "Frequency", &mut p.base_freq, ranges::BASE_FREQ, d.base_freq, " Hz", true);
         param(ui, "Slide", &mut p.slide, ranges::SLIDE, 0.0, " oct/s", false);
         param(ui, "Slide accel", &mut p.delta_slide, ranges::DELTA_SLIDE, 0.0, " oct/s²", false);
         param(ui, "Vibrato depth", &mut p.vibrato_depth, ranges::VIBRATO_DEPTH, 0.0, " st", false);
         param(ui, "Vibrato rate", &mut p.vibrato_rate, ranges::VIBRATO_RATE, d.vibrato_rate, " Hz", false);
-    });
+    })
 }
 
-fn arp_section(ui: &mut Ui, layer: &mut Layer, view: &View) {
+fn arp_section(ui: &mut Ui, layer: &mut Layer, view: &View, grip: Grip) -> Option<(usize, usize)> {
     let d = Pitch::default();
     let sound_secs = sfxc_core::env::length(&layer.env);
     let pitch = &mut layer.pitch;
     let mut enabled = pitch.arp_enabled;
     // The header toggle owns `enabled` while the section draws; the body reads this copy.
     let body_enabled = enabled;
-    section(ui, "arp", "Arpeggio", |ui| {
+    let moved = section(ui, "arp", "Arpeggio", Some(grip), |ui| {
         toggle(ui, &mut enabled, "").on_hover_text(if body_enabled { "Turn arpeggio off" } else { "Turn arpeggio on" });
     }, |ui| {
         ui.add_enabled_ui(body_enabled, |ui| {
@@ -336,11 +405,12 @@ fn arp_section(ui: &mut Ui, layer: &mut Layer, view: &View) {
         });
     });
     pitch.arp_enabled = enabled;
+    moved
 }
 
-fn envelope_section(ui: &mut Ui, layer: &mut Layer) {
+fn envelope_section(ui: &mut Ui, layer: &mut Layer, grip: Grip) -> Option<(usize, usize)> {
     let d = Envelope::default();
-    section(ui, "envelope", "Envelope", |_| {}, |ui| {
+    section(ui, "envelope", "Envelope", Some(grip), |_| {}, |ui| {
         let e = &mut layer.env;
         param(ui, "Attack", &mut e.attack, ranges::ENV_TIME, d.attack, " s", true);
         param(ui, "Decay", &mut e.decay, ranges::ENV_TIME, d.decay, " s", true);
@@ -348,13 +418,13 @@ fn envelope_section(ui: &mut Ui, layer: &mut Layer) {
         param(ui, "Sustain time", &mut e.sustain_time, ranges::ENV_TIME, d.sustain_time, " s", true);
         param(ui, "Release", &mut e.release, ranges::ENV_TIME, d.release, " s", true);
         param(ui, "Punch", &mut e.punch, ranges::UNIT, d.punch, "", false);
-    });
+    })
 }
 
-fn filter_section(ui: &mut Ui, layer: &mut Layer) {
+fn filter_section(ui: &mut Ui, layer: &mut Layer, grip: Grip) -> Option<(usize, usize)> {
     let d = Filter::default();
     let f = &mut layer.filter;
-    section(ui, "filter", "Filter", |_| {}, |ui| {
+    section(ui, "filter", "Filter", Some(grip), |_| {}, |ui| {
         let options: Vec<_> = FilterKind::ALL.iter().map(|k| (*k, k.label())).collect();
         segmented(ui, &mut f.kind, &options);
         ui.add_space(4.0);
@@ -363,5 +433,5 @@ fn filter_section(ui: &mut Ui, layer: &mut Layer) {
             param(ui, "Resonance", &mut f.resonance, ranges::UNIT, d.resonance, "", false);
             param(ui, "Sweep", &mut f.sweep, ranges::SWEEP, d.sweep, " oct/s", false);
         });
-    });
+    })
 }

@@ -15,6 +15,8 @@ use super::theme::{self, palette, Palette, R_CARD, R_CONTROL};
 const LABEL_W: f32 = 104.0;
 const VALUE_W: f32 = 92.0;
 const ROW_GAP: f32 = 10.0;
+/// Vertical space after a card, on top of the item spacing.
+const CARD_GAP: f32 = 14.0;
 
 /// Muted, left-aligned label in the fixed first column of parameter rows.
 pub fn row_label(ui: &mut Ui, label: &str) {
@@ -29,13 +31,9 @@ pub fn param(ui: &mut Ui, label: &str, v: &mut f32, range: Range, default: f32, 
     param_row(ui, label, v, range.0, range.1, default, suffix, log)
 }
 
-/// Rotary variant of [`param`] for compact layouts (effect cards).
-pub fn knob(ui: &mut Ui, label: &str, v: &mut f32, range: Range, default: f32, suffix: &str, log: bool) -> Response {
-    controls::knob(ui, label, v, range.0, range.1, default, suffix, log)
-}
-
-pub fn knob_num<N: Numeric>(ui: &mut Ui, label: &str, v: &mut N, lo: N, hi: N, default: N, suffix: &str) -> Response {
-    controls::knob(ui, label, v, lo, hi, default, suffix, false)
+/// Integer (or other numeric) variant of [`param`].
+pub fn param_num<N: Numeric>(ui: &mut Ui, label: &str, v: &mut N, lo: N, hi: N, default: N, suffix: &str) -> Response {
+    param_row(ui, label, v, lo, hi, default, suffix, false)
 }
 
 /// Digits after the decimal point, by the size of the range, so a column of values lines up.
@@ -240,6 +238,11 @@ pub fn card_frame(_ui: &Ui) -> Frame {
 
 /// Frame content on a raised card. Shadows are painted under the content after layout.
 pub fn material_card<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+    material_card_response(ui, add).inner
+}
+
+/// Like [`material_card`], but also returns the card's response (its rect, for drop targets).
+pub fn material_card_response<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> egui::InnerResponse<R> {
     let p = palette(ui);
     let under = ui.painter().add(Shape::Noop);
     let inner = card_frame(ui).show(ui, add);
@@ -253,23 +256,75 @@ pub fn material_card<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     shapes.push(Shape::from(Shadow { offset: [d, d], blur: 16, spread: 0, color: p.shadow_dark }.as_shape(rect, R_CARD)));
     shapes.push(Shape::rect_filled(rect, R_CARD, p.surface));
     painter.set(under, Shape::Vec(shapes));
-    inner.inner
+    inner
+}
+
+/// Lets tests find the drag handles that were drawn in the last frame.
+#[cfg(test)]
+pub mod test_support {
+    use std::cell::RefCell;
+
+    use eframe::egui::Rect;
+
+    thread_local! {
+        pub static GRIPS: RefCell<Vec<Rect>> = const { RefCell::new(Vec::new()) };
+    }
+
+    pub fn take_grips() -> Vec<Rect> {
+        GRIPS.with(|g| std::mem::take(&mut *g.borrow_mut()))
+    }
+}
+
+/// Where a card sits in a reorderable group: `group` names the list, `index` is its position.
+#[derive(Clone, Copy)]
+pub struct Grip<'a> {
+    pub group: &'a str,
+    pub index: usize,
+}
+
+#[derive(Clone, Copy)]
+struct DragPayload {
+    group: egui::Id,
+    index: usize,
 }
 
 /// Collapsible card; open state is remembered per `key`. `header` adds widgets at the right of the title.
-pub fn section(ui: &mut Ui, key: &str, title: &str, header: impl FnOnce(&mut Ui), body: impl FnOnce(&mut Ui)) {
+/// With a `grip` the card has a drag handle and can be dropped onto other cards of the same group;
+/// the result is `(from, to)` when something was dropped on this card.
+pub fn section(
+    ui: &mut Ui,
+    key: &str,
+    title: &str,
+    grip: Option<Grip>,
+    header: impl FnOnce(&mut Ui),
+    body: impl FnOnce(&mut Ui),
+) -> Option<(usize, usize)> {
+    let p = palette(ui);
     let id = ui.make_persistent_id(("section", key));
     let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, true);
-    material_card(ui, |ui| {
+    let card = material_card_response(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {
+            if let Some(g) = grip {
+                let payload = DragPayload { group: egui::Id::new(g.group), index: g.index };
+                let handle = ui
+                    .dnd_drag_source(egui::Id::new(("grip", g.group, key)), payload, |ui| {
+                        ui.label(RichText::new(icon::DOTS_SIX_VERTICAL).color(p.faint).size(16.0));
+                    })
+                    .response
+                    .on_hover_cursor(CursorIcon::Grab);
+                #[cfg(test)]
+                test_support::GRIPS.with(|g| g.borrow_mut().push(handle.rect));
+                #[cfg(not(test))]
+                let _ = handle;
+            }
             state.show_toggle_button(ui, |ui, openness, resp| {
                 let p = palette(ui);
                 let color = if resp.hovered() { p.text } else { p.muted };
                 let glyph = if openness > 0.5 { icon::CARET_DOWN } else { icon::CARET_RIGHT };
                 ui.painter().text(resp.rect.center(), Align2::CENTER_CENTER, glyph, FontId::proportional(14.0), color);
             });
-            let label = egui::Label::new(RichText::new(title).font(FontId::new(13.5, theme::semibold())).color(palette(ui).text));
+            let label = egui::Label::new(RichText::new(title).font(FontId::new(13.5, theme::semibold())).color(p.text));
             if ui.add(label.sense(Sense::click())).on_hover_cursor(CursorIcon::PointingHand).clicked() {
                 state.toggle(ui);
             }
@@ -280,7 +335,25 @@ pub fn section(ui: &mut Ui, key: &str, title: &str, header: impl FnOnce(&mut Ui)
             body(ui);
         });
     });
-    ui.add_space(14.0);
+    ui.add_space(CARD_GAP);
+
+    let g = grip?;
+    let group = egui::Id::new(g.group);
+    let rect = card.response.rect;
+    let payload = egui::DragAndDrop::payload::<DragPayload>(ui.ctx()).filter(|pl| pl.group == group && pl.index != g.index)?;
+    // The drop zone includes half of the gap on each side, so a drop between two cards still lands.
+    let half_gap = (CARD_GAP + ui.spacing().item_spacing.y) / 2.0;
+    let over = ui.ctx().pointer_interact_pos().is_some_and(|pt| rect.expand2(Vec2::new(0.0, half_gap)).contains(pt));
+    if !over {
+        return None;
+    }
+    if ui.input(|i| i.pointer.any_released()) {
+        return Some((payload.index, g.index));
+    }
+    // Dropping moves the dragged card to this slot, so the line goes on the side it will land.
+    let y = if payload.index > g.index { rect.top() - half_gap } else { rect.bottom() + half_gap };
+    ui.painter().hline(rect.x_range(), y, Stroke::new(2.0, p.accent));
+    None
 }
 
 pub fn panel_header(ui: &mut Ui, title: &str, trailing: impl FnOnce(&mut Ui)) {

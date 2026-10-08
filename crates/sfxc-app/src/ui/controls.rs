@@ -1,7 +1,7 @@
 //! Custom value controls: horizontal track and rotary knob, sharing one input model.
 
 use eframe::egui::{
-    self, emath::Numeric, vec2, Align2, CursorIcon, FontId, Id, Key, LayerId, Order, Pos2, Rect, Response, Sense, Shape, Stroke, Ui, Vec2,
+    self, emath::Numeric, vec2, CursorIcon, FontId, Id, Key, LayerId, Order, Pos2, Rect, Response, Sense, Stroke, Ui, Vec2,
 };
 
 use super::material::{self, Motion};
@@ -149,52 +149,6 @@ pub fn track<N: Numeric>(ui: &mut Ui, v: &mut N, lo: N, hi: N, default: N, log: 
         bubble(ui, resp.id, &format_value(v.to_f64(), N::INTEGRAL, ""), &p);
     }
     resp.on_hover_cursor(CursorIcon::ResizeHorizontal)
-}
-
-/// Rotary knob with label below and value shown on hover or drag.
-#[allow(clippy::too_many_arguments)]
-pub fn knob<N: Numeric>(ui: &mut Ui, label: &str, v: &mut N, lo: N, hi: N, default: N, suffix: &str, log: bool) -> Response {
-    let p = palette(ui);
-    let size = vec2(64.0, 76.0);
-    let (rect, mut resp) = ui.allocate_exact_size(size, Sense::click_and_drag());
-    let resp_c = resp.clone();
-    let mut t = to_norm(v.to_f64(), lo.to_f64(), hi.to_f64(), log);
-    let moved = input(ui, &mut resp, &mut t, 1.0 / 180.0, true);
-    commit(&mut resp, v, t, lo, hi, default, log, moved);
-    let t = to_norm(v.to_f64(), lo.to_f64(), hi.to_f64(), log);
-    if ui.is_rect_visible(rect) {
-        let m = Motion::of(ui, &resp_c);
-        let painter = ui.painter();
-        let c = Pos2::new(rect.center().x, rect.top() + 24.0);
-        let r = 18.0;
-        let arc = |from: f32, to: f32| -> Vec<Pos2> {
-            (0..=32)
-                .map(|i| {
-                    let a = egui::lerp(from..=to, i as f32 / 32.0);
-                    c + vec2(a.cos(), a.sin()) * (r + 4.0)
-                })
-                .collect()
-        };
-        let (start, sweep) = (135f32.to_radians(), 270f32.to_radians());
-        painter.add(Shape::line(arc(start, start + sweep), Stroke::new(3.0, p.well)));
-        let strength = 0.6 + 0.4 * m.hover.max(m.focus).max(if resp_c.dragged() { 1.0 } else { 0.0 });
-        painter.add(Shape::line(arc(start, start + sweep * t), Stroke::new(3.0, p.accent.gamma_multiply(strength))));
-        let body = Rect::from_center_size(c, Vec2::splat(r * 2.0));
-        material::raised(painter, body, r, &Palette { raised: p.knob, ..p }, &m);
-        let a = start + sweep * t;
-        painter.circle_filled(c + vec2(a.cos(), a.sin()) * (r - 6.0), 2.5, p.accent);
-        let shown = if m.hover > 0.5 || resp_c.dragged() || resp_c.has_focus() {
-            format_value(v.to_f64(), N::INTEGRAL, suffix)
-        } else {
-            label.to_string()
-        };
-        let color = if ui.is_enabled() { p.muted } else { p.faint };
-        painter.text(Pos2::new(rect.center().x, rect.bottom() - 10.0), Align2::CENTER_CENTER, shown, FontId::proportional(11.5), color);
-    }
-    if resp.dragged() {
-        bubble(ui, resp.id, &format_value(v.to_f64(), N::INTEGRAL, suffix), &p);
-    }
-    resp.on_hover_cursor(CursorIcon::ResizeVertical).on_hover_text(label)
 }
 
 #[cfg(test)]
