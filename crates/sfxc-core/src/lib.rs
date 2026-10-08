@@ -7,3 +7,4 @@ pub mod filter;
 pub mod fx;
 pub mod mode;
 pub mod render;
+pub mod generators;
