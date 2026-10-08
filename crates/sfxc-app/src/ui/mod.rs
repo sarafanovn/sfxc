@@ -951,3 +951,60 @@ mod tests {
         assert_eq!(s.sound_meta(a).unwrap().0, "a");
     }
 }
+
+/// Renders the editor headlessly with the pointer swept over a grid, so proximity effects run
+/// near every control. Catches NaN or degenerate rects in custom drawing code.
+#[cfg(test)]
+mod render_smoke {
+    use super::*;
+    use eframe::egui::{pos2, vec2, Event, Rect};
+
+    #[test]
+    fn editor_survives_pointer_everywhere() {
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let (w, h) = (900.0, 1400.0);
+        let mut cur = Current {
+            id: 1,
+            name: "a".into(),
+            tags: String::new(),
+            patch: generators::generate(Category::PickupCoin, Mode::Modern, 3),
+            saved_json: String::new(),
+            changed_at: None,
+        };
+        cur.patch.layers[0].env.attack = 0.0;
+        cur.patch.layers[0].pitch.arp_steps = vec![0, 12];
+        cur.patch.master_effects.push(sfxc_core::patch::Effect {
+            id: 1,
+            enabled: true,
+            kind: sfxc_core::patch::EffectKind::all_defaults()[0],
+        });
+        let samples = vec![0.1f32; 4800];
+        let (mut auto, mut vol, mut note) = (true, 0.8f32, None);
+        let mut t = 0.0f64;
+        for gy in 0..28 {
+            for gx in 0..12 {
+                t += 0.016;
+                let input = egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(w, h))),
+                    events: vec![Event::PointerMoved(pos2(gx as f32 * 80.0 + 20.0, gy as f32 * 50.0 + 10.0))],
+                    time: Some(t),
+                    ..Default::default()
+                };
+                let mut out = ctx.run_ui(input, |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        let view = editor::View {
+                            rendered: Some((samples.as_slice(), 48_000)),
+                            progress: Some(0.3),
+                            can_undo: false,
+                            can_redo: false,
+                            audio_error: None,
+                        };
+                        editor::show(ui, &mut cur, &view, &mut auto, &mut vol, &mut note, &mut Vec::new());
+                    });
+                });
+                out.textures_delta.clear();
+            }
+        }
+    }
+}

@@ -7,15 +7,33 @@ use eframe::egui::{
 use super::material::{self, Motion};
 use super::theme::{palette, Palette};
 
-/// Value → 0..1 position. Log scales need `lo > 0`.
+/// Lower end of a log scale. Ranges that start at 0 (envelope times) use a small positive floor,
+/// since `ln(0)` is not finite.
+fn log_floor(lo: f64, hi: f64) -> f64 {
+    if lo > 0.0 { lo } else { (hi * 1e-4).max(1e-6) }
+}
+
+/// Value → 0..1 position. Values at or below the floor of a log scale map to 0.
 pub fn to_norm(v: f64, lo: f64, hi: f64, log: bool) -> f32 {
-    let t = if log { (v.max(lo).ln() - lo.ln()) / (hi.ln() - lo.ln()) } else { (v - lo) / (hi - lo) };
-    t.clamp(0.0, 1.0) as f32
+    let t = if log {
+        let floor = log_floor(lo, hi);
+        (v.max(floor).ln() - floor.ln()) / (hi.ln() - floor.ln())
+    } else {
+        (v - lo) / (hi - lo)
+    };
+    if t.is_finite() { t.clamp(0.0, 1.0) as f32 } else { 0.0 }
 }
 
 pub fn from_norm(t: f32, lo: f64, hi: f64, log: bool) -> f64 {
     let t = t.clamp(0.0, 1.0) as f64;
-    if log { (lo.ln() + t * (hi.ln() - lo.ln())).exp() } else { lo + t * (hi - lo) }
+    if !log {
+        return lo + t * (hi - lo);
+    }
+    if t == 0.0 {
+        return lo;
+    }
+    let floor = log_floor(lo, hi);
+    (floor.ln() + t * (hi.ln() - floor.ln())).exp().max(lo)
 }
 
 /// The wheel edits a value only while the control is hovered and either focused or Alt is held;
@@ -193,6 +211,20 @@ mod tests {
         }
         assert!((from_norm(0.5, 20.0, 20_000.0, true) - 632.45).abs() < 0.1);
         assert_eq!(to_norm(5.0, 0.0, 1.0, false), 1.0);
+    }
+
+    #[test]
+    fn log_scale_with_zero_minimum_stays_finite() {
+        // Envelope times start at 0 and are drawn on a log scale; ln(0) must not leak NaN into layout.
+        for v in [0.0, 1e-9, 0.01, 1.0] {
+            let t = to_norm(v, 0.0, 1.0, true);
+            assert!(t.is_finite() && (0.0..=1.0).contains(&t), "v {v} -> {t}");
+        }
+        assert_eq!(to_norm(0.0, 0.0, 1.0, true), 0.0);
+        assert_eq!(from_norm(0.0, 0.0, 1.0, true), 0.0);
+        let mid = from_norm(0.5, 0.0, 1.0, true);
+        assert!(mid.is_finite() && mid > 0.0 && mid < 1.0);
+        assert!((from_norm(1.0, 0.0, 1.0, true) - 1.0).abs() < 1e-9);
     }
 
     #[test]

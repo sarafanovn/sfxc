@@ -66,7 +66,8 @@ pub fn surface(painter: &Painter, rect: Rect, radius: f32, base: Color32, highli
     let bottom = base.lerp_to_gamma(Color32::BLACK, 0.04);
     let shade = |y: f32| top.lerp_to_gamma(bottom, ((y - rect.top()) / rect.height().max(1.0)).clamp(0.0, 1.0));
     let outline = rounded_outline(rect.shrink(0.5), radius - 0.5, 6);
-    let center = highlight.map_or(rect.center(), |(p, _)| p.clamp(rect.min, rect.max));
+    // Not `Pos2::clamp`: that panics on a degenerate or NaN rect.
+    let center = highlight.map_or(rect.center(), |(p, _)| Pos2::new(p.x.max(rect.min.x).min(rect.max.x), p.y.max(rect.min.y).min(rect.max.y)));
     let center_color = match highlight {
         Some((_, s)) => shade(center.y).lerp_to_gamma(Color32::WHITE, s.clamp(0.0, 1.0)),
         None => shade(center.y),
