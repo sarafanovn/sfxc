@@ -4,9 +4,10 @@ use std::num::{NonZeroU32, NonZeroU8};
 use std::path::Path;
 
 use anyhow::{bail, Context, Result};
+use serde::{Deserialize, Serialize};
 use vorbis_rs::{VorbisBitrateManagementStrategy, VorbisEncoderBuilder};
 
-use crate::patch::SoundPatch;
+use crate::patch::{Mode, SoundPatch};
 use crate::render::{render, trim_tail};
 
 /// −1 dBFS.
@@ -16,7 +17,7 @@ pub const TRIM_THRESHOLD: f32 = 0.001;
 /// Fixed Ogg stream serial so exports are reproducible.
 const OGG_SERIAL: i32 = 0x5F78_6373;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ExportFormat {
     Wav { bits: u16 },
     Ogg { quality: f32 },
@@ -31,7 +32,16 @@ impl ExportFormat {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// WAV depth that matches the sound's mode.
+pub fn wav_bits(mode: Mode) -> u16 {
+    match mode {
+        Mode::Bit8 => 8,
+        Mode::Bit16 => 16,
+        Mode::Modern => 24,
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ExportOptions {
     pub format: ExportFormat,
     pub sample_rate: u32,
@@ -137,6 +147,19 @@ mod tests {
 
     fn tone() -> Vec<f32> {
         (0..22_050).map(|i| 0.5 * (i as f32 * 0.05).sin()).collect()
+    }
+
+    #[test]
+    fn wav_bits_follow_the_mode() {
+        use crate::patch::Mode;
+        assert_eq!((wav_bits(Mode::Bit8), wav_bits(Mode::Bit16), wav_bits(Mode::Modern)), (8, 16, 24));
+    }
+
+    #[test]
+    fn options_round_trip_through_json() {
+        let opts = ExportOptions { format: ExportFormat::Ogg { quality: 4.0 }, duration: Some(0.5), ..Default::default() };
+        let back: ExportOptions = serde_json::from_str(&serde_json::to_string(&opts).unwrap()).unwrap();
+        assert_eq!(back, opts);
     }
 
     #[test]

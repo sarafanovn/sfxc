@@ -1,6 +1,6 @@
 use eframe::egui::{self, Align, Align2, CursorIcon, FontId, Layout, RichText, Sense, Ui};
 use egui_phosphor::regular as icon;
-use sfxc_core::export::{ExportFormat, ExportOptions};
+use sfxc_core::export::{wav_bits, ExportFormat, ExportOptions};
 use sfxc_core::patch::Mode;
 
 use super::theme::{self, palette};
@@ -31,14 +31,6 @@ impl Default for ExportDialog {
 }
 
 const SECONDS: (f32, f32) = (0.05, 10.0);
-
-pub fn wav_bits(mode: Mode) -> u16 {
-    match mode {
-        Mode::Bit8 => 8,
-        Mode::Bit16 => 16,
-        Mode::Modern => 24,
-    }
-}
 
 impl ExportDialog {
     pub fn options(&self, mode: Mode) -> ExportOptions {
