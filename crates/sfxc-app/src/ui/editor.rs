@@ -79,12 +79,12 @@ pub fn show(
             effects::show(ui, &mut cur.patch.master_effects, next_id);
         });
     });
-    dock(ui, panel, &mut cur.patch, volume, actions);
+    dock(ui, panel, volume, actions);
 }
 
-/// Bottom-right corner: a small speaker that grows into playback Volume and the sound's Gain
-/// while the pointer is over it.
-fn dock(ui: &mut Ui, panel: Rect, patch: &mut SoundPatch, volume: &mut f32, actions: &mut Vec<Action>) {
+/// Bottom-right corner: a small speaker that grows into the playback Volume slider while the pointer
+/// is over it.
+fn dock(ui: &mut Ui, panel: Rect, volume: &mut f32, actions: &mut Vec<Action>) {
     const OPEN_W: f32 = 270.0;
     const ROW_H: f32 = 30.0;
     let p = palette(ui);
@@ -95,7 +95,7 @@ fn dock(ui: &mut Ui, panel: Rect, patch: &mut SoundPatch, volume: &mut f32, acti
     // Stay open while a slider is being dragged even if the pointer leaves the card.
     let open = last.is_some_and(|(rect, was_open)| pointer.is_some_and(|pt| rect.expand(10.0).contains(pt)) || (was_open && dragging));
     let t = ui.ctx().animate_bool_with_time(id.with("t"), open, 0.18);
-    let rows_h = ROW_H * 2.0 + 8.0;
+    let rows_h = ROW_H + 8.0;
     let w = egui::lerp(36.0..=OPEN_W, t);
 
     let area = egui::Area::new(id)
@@ -118,10 +118,6 @@ fn dock(ui: &mut Ui, panel: Rect, patch: &mut SoundPatch, volume: &mut f32, acti
                         if r.drag_stopped() || (r.changed() && !r.dragged()) {
                             actions.push(Action::SaveVolume);
                         }
-                    });
-                    dock_row(&mut rows, "Gain", w, |ui, width| {
-                        let default = SoundPatch::default().master_volume;
-                        controls::track(ui, &mut patch.master_volume, ranges::UNIT.0, ranges::UNIT.1, default, false, width).on_hover_text("Level of this sound, saved with it");
                     });
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -217,6 +213,11 @@ fn transport(ui: &mut Ui, cur: &mut Current, view: &View, autoplay: &mut bool, m
             if button(ui, Kind::Secondary, Some(icon::MAGIC_WAND), "Mutate").on_hover_text("Small random changes (M)").clicked() {
                 actions.push(Action::Mutate);
             }
+            ui.add_space(4.0);
+            ui.label(RichText::new("Gain").size(12.5).color(palette(ui).muted));
+            let default = SoundPatch::default().master_volume;
+            controls::track(ui, &mut cur.patch.master_volume, ranges::UNIT.0, ranges::UNIT.1, default, false, 110.0)
+                .on_hover_text("Level of this sound, saved with it");
         });
     });
     if let Some(note) = mode_note.as_ref() {
