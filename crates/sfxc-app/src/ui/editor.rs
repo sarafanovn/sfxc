@@ -1,4 +1,4 @@
-use eframe::egui::{self, vec2, Align, Align2, FontId, Frame, Id, Layout, Margin, Rect, RichText, Sense, Ui};
+use eframe::egui::{self, vec2, Align, Align2, FontId, Frame, Id, Layout, Margin, Pos2, Rect, RichText, Sense, Ui};
 use egui_phosphor::regular as icon;
 use sfxc_core::generators::Category;
 use sfxc_core::mode::{describe_mapping, map_source_to_mode, NES_DUTIES};
@@ -32,11 +32,9 @@ pub fn show(
     cur: &mut Current,
     view: &View,
     autoplay: &mut bool,
-    volume: &mut f32,
     mode_note: &mut Option<String>,
     actions: &mut Vec<Action>,
 ) {
-    let panel = ui.max_rect();
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         let side = ((ui.available_width() - MAX_CONTENT) / 2.0).clamp(24.0, 127.0) as i8;
         Frame::new().inner_margin(Margin { left: side, right: side, top: 16, bottom: 96 }).show(ui, |ui| {
@@ -79,13 +77,12 @@ pub fn show(
             effects::show(ui, &mut cur.patch.master_effects, next_id);
         });
     });
-    dock(ui, panel, volume, actions);
 }
 
-/// Bottom-right corner: a small speaker that grows into the playback Volume slider while the pointer
-/// is over it.
-fn dock(ui: &mut Ui, panel: Rect, volume: &mut f32, actions: &mut Vec<Action>) {
-    const OPEN_W: f32 = 270.0;
+/// A small speaker whose bottom-right corner sits at `anchor`; it grows into the playback Volume
+/// slider while the pointer is over it.
+pub fn dock(ui: &mut Ui, anchor: Pos2, volume: &mut f32, actions: &mut Vec<Action>) {
+    const OPEN_W: f32 = 236.0;
     const ROW_H: f32 = 30.0;
     let p = palette(ui);
     let id = Id::new("dock");
@@ -101,7 +98,7 @@ fn dock(ui: &mut Ui, panel: Rect, volume: &mut f32, actions: &mut Vec<Action>) {
     let area = egui::Area::new(id)
         .order(egui::Order::Foreground)
         .pivot(Align2::RIGHT_BOTTOM)
-        .fixed_pos(panel.right_bottom() - vec2(28.0, 24.0))
+        .fixed_pos(anchor)
         .show(ui.ctx(), |ui| {
             material_card_response(ui, |ui| {
                 ui.set_width(w);

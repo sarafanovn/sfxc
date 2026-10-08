@@ -874,9 +874,18 @@ impl eframe::App for SfxcApp {
             let current = self.current.as_ref().map(|c| c.id);
             library::show(ui, &self.sounds, &mut self.search, current, now, &self.prefs, &mut actions);
         });
-        egui::Panel::right("versions").resizable(false).exact_size(292.0).show_separator_line(false).frame(side(18)).show(ui, |ui| {
-            versions::show(ui, &self.versions, self.current_version, self.current.is_some(), now, &mut actions);
-        });
+        let versions_rect = egui::Panel::right("versions")
+            .resizable(false)
+            .exact_size(292.0)
+            .show_separator_line(false)
+            .frame(side(18))
+            .show(ui, |ui| {
+                // Empty strip under the history: the volume control floats here.
+                egui::Panel::bottom("versions_footer").exact_size(56.0).frame(egui::Frame::NONE).show_separator_line(false).show(ui, |_| {});
+                versions::show(ui, &self.versions, self.current_version, self.current.is_some(), now, &mut actions);
+            })
+            .response
+            .rect;
         let progress = self.player.progress();
         if progress.is_some() {
             ctx.request_repaint();
@@ -892,8 +901,7 @@ impl eframe::App for SfxcApp {
                     can_redo: self.history.can_redo(),
                     audio_error: self.player.error(),
                 };
-                editor::show(ui, cur, &view, &mut self.autoplay, &mut self.prefs.volume, &mut self.mode_note, &mut actions);
-                self.player.set_volume(self.prefs.volume);
+                editor::show(ui, cur, &view, &mut self.autoplay, &mut self.mode_note, &mut actions);
                 if cur.patch != snapshot {
                     before = Some(snapshot);
                 }
@@ -913,6 +921,8 @@ impl eframe::App for SfxcApp {
                 );
             }
         });
+        editor::dock(ui, versions_rect.right_bottom() - egui::vec2(18.0, 14.0), &mut self.prefs.volume, &mut actions);
+        self.player.set_volume(self.prefs.volume);
 
         self.after_edit(before, &ctx);
         self.dialogs(&ctx);
@@ -990,7 +1000,7 @@ mod render_smoke {
 
     fn frame(ctx: &egui::Context, cur: &mut Current, t: &mut f64, events: Vec<Event>, actions: &mut Vec<Action>) {
         let samples = vec![0.1f32; 4800];
-        let (mut auto, mut vol, mut note) = (true, 0.8f32, None);
+        let (mut auto, mut note) = (true, None);
         *t += 0.016;
         let input = egui::RawInput {
             screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 2800.0))),
@@ -1007,7 +1017,7 @@ mod render_smoke {
                     can_redo: false,
                     audio_error: None,
                 };
-                editor::show(ui, cur, &view, &mut auto, &mut vol, &mut note, actions);
+                editor::show(ui, cur, &view, &mut auto, &mut note, actions);
             });
         });
         out.textures_delta.clear();
@@ -1116,6 +1126,39 @@ mod render_smoke {
         assert_eq!(open, Some(false), "title click should fold the card");
     }
 
+    /// The volume dock is a small speaker that grows while the pointer is over it.
+    #[test]
+    fn volume_dock_opens_on_hover_and_closes_again() {
+        let ctx = egui::Context::default();
+        theme::install(&ctx);
+        let anchor = pos2(900.0, 780.0);
+        let (mut t, mut vol) = (0.0f64, 0.8f32);
+        let mut run = |pointer: Option<egui::Pos2>, frames: usize| {
+            for _ in 0..frames {
+                t += 0.05;
+                let events = pointer.map(Event::PointerMoved).into_iter().collect();
+                let input = egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 800.0))),
+                    events,
+                    time: Some(t),
+                    ..Default::default()
+                };
+                let mut out = ctx.run_ui(input, |ui| editor::dock(ui, anchor, &mut vol, &mut Vec::new()));
+                out.textures_delta.clear();
+            }
+        };
+        let width = |ctx: &egui::Context| {
+            ctx.data(|d| d.get_temp::<(Rect, bool)>(egui::Id::new("dock").with("state"))).map_or(0.0, |(r, _)| r.width())
+        };
+        run(None, 3);
+        let closed = width(&ctx);
+        run(Some(anchor - vec2(15.0, 15.0)), 12);
+        let open = width(&ctx);
+        assert!(open > closed + 100.0, "dock should grow under the pointer: {closed} -> {open}");
+        run(Some(pos2(100.0, 100.0)), 12);
+        assert!(width(&ctx) < closed + 5.0, "dock should fold again when the pointer leaves");
+    }
+
     fn sweep(picker_open: bool) {
         let ctx = egui::Context::default();
         theme::install(&ctx);
@@ -1137,7 +1180,7 @@ mod render_smoke {
             kind: sfxc_core::patch::EffectKind::all_defaults()[0],
         });
         let samples = vec![0.1f32; 4800];
-        let (mut auto, mut vol, mut note) = (true, 0.8f32, None);
+        let (mut auto, mut note) = (true, None);
         let mut t = 0.0f64;
         for gy in 0..28 {
             for gx in 0..12 {
@@ -1157,7 +1200,7 @@ mod render_smoke {
                             can_redo: false,
                             audio_error: None,
                         };
-                        editor::show(ui, &mut cur, &view, &mut auto, &mut vol, &mut note, &mut Vec::new());
+                        editor::show(ui, &mut cur, &view, &mut auto, &mut note, &mut Vec::new());
                     });
                 });
                 out.textures_delta.clear();
