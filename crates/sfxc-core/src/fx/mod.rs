@@ -24,6 +24,13 @@ pub(crate) fn mix(dry: f32, wet: f32, amount: f32) -> f32 {
     dry * (1.0 - amount) + wet * amount
 }
 
+/// Next index of a circular buffer of length `len`.
+#[inline]
+pub(crate) fn wrap_next(i: usize, len: usize) -> usize {
+    let n = i + 1;
+    if n == len { 0 } else { n }
+}
+
 pub enum Processor {
     Bitcrusher(Bitcrusher),
     Distortion(Distortion),
@@ -35,8 +42,7 @@ pub enum Processor {
 }
 
 impl Processor {
-    pub fn new(kind: &EffectKind, sample_rate: f32) -> Self {
-        let sr = sample_rate;
+    pub fn new(kind: &EffectKind, sr: f32) -> Self {
         match *kind {
             EffectKind::Bitcrusher { bits, downsample, mix } => Processor::Bitcrusher(Bitcrusher::new(bits, downsample, mix)),
             EffectKind::Distortion { kind, drive, tone, mix } => Processor::Distortion(Distortion::new(kind, drive, tone, mix, sr)),

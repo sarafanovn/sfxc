@@ -52,6 +52,7 @@ pub struct Oscillator {
     lfsr: u16,
     fm_phase: [f32; 4],
     fm_prev: [f32; 2],
+    fm_ratio: [f32; 4],
 }
 
 impl Oscillator {
@@ -68,6 +69,10 @@ impl Oscillator {
             lfsr: 1,
             fm_phase: [0.0; 4],
             fm_prev: [0.0; 2],
+            fm_ratio: match source {
+                Source::Fm { ops, .. } => ops.map(|o| o.ratio * 2f32.powf(o.detune / 1200.0)),
+                _ => [0.0; 4],
+            },
         }
     }
 
@@ -147,9 +152,8 @@ impl Oscillator {
             FmAlgorithm::Parallel => 0.25 * (o0 + op(1, 0.0) + op(2, 0.0) + op(3, 0.0)),
         };
         self.fm_prev = [o0, self.fm_prev[0]];
-        for (i, o) in ops.iter().enumerate() {
-            let ratio = o.ratio * 2f32.powf(o.detune / 1200.0);
-            self.fm_phase[i] = (self.fm_phase[i] + dt * ratio).fract();
+        for (phase, ratio) in self.fm_phase.iter_mut().zip(self.fm_ratio) {
+            *phase = (*phase + dt * ratio).fract();
         }
         out.clamp(-1.0, 1.0)
     }

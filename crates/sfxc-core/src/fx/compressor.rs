@@ -5,6 +5,7 @@ pub struct Compressor {
     att: f32,
     rel: f32,
     makeup_db: f32,
+    makeup_gain: f32,
     env_db: f32,
 }
 
@@ -16,6 +17,7 @@ impl Compressor {
             att: (-1.0 / (attack * sample_rate)).exp(),
             rel: (-1.0 / (release * sample_rate)).exp(),
             makeup_db,
+            makeup_gain: 10f32.powf(makeup_db / 20.0),
             env_db: -120.0,
         }
     }
@@ -25,7 +27,10 @@ impl Compressor {
         let coef = if level_db > self.env_db { self.att } else { self.rel };
         self.env_db = level_db + coef * (self.env_db - level_db);
         let over = self.env_db - self.threshold_db;
-        let reduction = if over > 0.0 { over * (1.0 - 1.0 / self.ratio) } else { 0.0 };
+        if over <= 0.0 {
+            return x * self.makeup_gain;
+        }
+        let reduction = over * (1.0 - 1.0 / self.ratio);
         x * 10f32.powf((self.makeup_db - reduction) / 20.0)
     }
 }

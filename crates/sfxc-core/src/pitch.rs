@@ -12,6 +12,12 @@ pub fn nes_quantize(freq: f32) -> f32 {
     NES_CPU_HZ / (16.0 * (period + 1.0))
 }
 
+/// The frequency when nothing modulates the pitch; equal to `freq_at` for every `t`.
+pub fn constant_freq(p: &Pitch, mode: Mode, sample_rate: f32) -> Option<f32> {
+    let arp = p.arp_enabled && !p.arp_steps.is_empty();
+    (p.slide == 0.0 && p.delta_slide == 0.0 && p.vibrato_depth <= 0.0 && !arp).then(|| freq_at(p, mode, 0.0, sample_rate))
+}
+
 pub fn freq_at(p: &Pitch, mode: Mode, t: f32, sample_rate: f32) -> f32 {
     let mut semis = 12.0 * (p.slide * t + 0.5 * p.delta_slide * t * t);
     if p.vibrato_depth > 0.0 {

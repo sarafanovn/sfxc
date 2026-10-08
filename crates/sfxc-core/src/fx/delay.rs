@@ -1,3 +1,5 @@
+use super::wrap_next;
+
 /// Feedback echo with a one-pole low-pass in the loop. Output = dry + mix * echo.
 pub struct Delay {
     buf: Vec<f32>,
@@ -18,7 +20,7 @@ impl Delay {
         let y = self.buf[self.w];
         self.lp = y * (1.0 - self.damping) + self.lp * self.damping;
         self.buf[self.w] = x + self.feedback * self.lp;
-        self.w = (self.w + 1) % self.buf.len();
+        self.w = wrap_next(self.w, self.buf.len());
         x + self.mix * y
     }
 }

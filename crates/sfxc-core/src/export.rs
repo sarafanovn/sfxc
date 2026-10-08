@@ -59,7 +59,7 @@ fn fit_duration(samples: &mut Vec<f32>, seconds: f32, sample_rate: u32) {
     let target = (seconds.max(0.0) * sample_rate as f32).round() as usize;
     if samples.len() > target {
         samples.truncate(target);
-        let fade = ((CUT_FADE_SECONDS * sample_rate as f32) as usize).min(target).max(1);
+        let fade = ((CUT_FADE_SECONDS * sample_rate as f32) as usize).clamp(1, target.max(1));
         for i in 0..fade.min(target) {
             samples[target - 1 - i] *= i as f32 / fade as f32;
         }

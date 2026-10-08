@@ -5,7 +5,7 @@ use crate::eq::EqFilter;
 use crate::fx::FxChain;
 use crate::mode::{map_source_to_mode, Limiter, OutputStage};
 use crate::osc::Oscillator;
-use crate::patch::{Mode, SoundPatch, MAX_SECONDS};
+use crate::patch::{Layer, Mode, SoundPatch, MAX_SECONDS};
 use crate::pitch;
 
 /// Extra time rendered after the envelopes end when a tail effect is enabled.
@@ -13,7 +13,14 @@ pub const TAIL_SECONDS: f32 = 4.0;
 /// −80 dB: anything quieter at the end is trimmed.
 pub const SILENCE: f32 = 1e-4;
 
+const CANCEL_CHECK: usize = 4096;
+
 pub fn render(patch: &SoundPatch, sample_rate: u32) -> Vec<f32> {
+    render_cancellable(patch, sample_rate, &|| false).expect("render without cancellation always finishes")
+}
+
+/// Returns `None` as soon as `cancelled` reports true.
+pub fn render_cancellable(patch: &SoundPatch, sample_rate: u32, cancelled: &(dyn Fn() -> bool + Sync)) -> Option<Vec<f32>> {
     let mut patch = patch.clone();
     patch.clamp();
     let sr = sample_rate as f32;
@@ -21,39 +28,79 @@ pub fn render(patch: &SoundPatch, sample_rate: u32) -> Vec<f32> {
     let body = patch.layers.iter().map(|l| env::length(&l.env)).fold(0.0, f32::max);
     let tail = FxChain::has_tail(&patch.master_effects) || patch.layers.iter().any(|l| FxChain::has_tail(&l.effects));
     let secs = (body + if tail { TAIL_SECONDS } else { 0.0 }).min(MAX_SECONDS);
-    let mut out = vec![0.0f32; (secs * sr).ceil() as usize];
+    let len = (secs * sr).ceil() as usize;
+    let mut out = vec![0.0f32; len];
 
-    for (i, layer) in patch.layers.iter().enumerate() {
-        let source = map_source_to_mode(&layer.source, patch.mode);
-        let seed = patch.seed.wrapping_add((i as u64).wrapping_mul(0x9E37_79B9));
-        let mut osc = Oscillator::new(source, patch.mode, sr, seed);
-        let mut eq = EqFilter::new(&layer.eq, sr);
-        let mut fx = FxChain::new(&layer.effects, sr);
-        for (k, sample) in out.iter_mut().enumerate() {
-            let t = k as f32 / sr;
-            let freq = pitch::freq_at(&layer.pitch, patch.mode, t, sr);
-            let s = osc.next(freq, t);
-            let s = eq.process(s);
-            let mut a = env::amp(&layer.env, t);
-            if patch.mode == Mode::Bit8 {
-                a = (a * 15.0).round() / 15.0;
-            }
-            *sample += fx.process(s * a) * layer.gain;
+    let (first, rest) = patch.layers.split_first().expect("clamp keeps at least one layer");
+    let rest_done = std::thread::scope(|scope| {
+        let workers: Vec<_> = rest
+            .iter()
+            .enumerate()
+            .map(|(i, layer)| {
+                let patch = &patch;
+                scope.spawn(move || {
+                    let mut buf = vec![0.0f32; len];
+                    render_layer(patch, layer, i + 1, sr, &mut buf, cancelled).then_some(buf)
+                })
+            })
+            .collect();
+        if !render_layer(&patch, first, 0, sr, &mut out, cancelled) {
+            return None;
         }
+        let mut bufs = Vec::with_capacity(workers.len());
+        for w in workers {
+            bufs.push(w.join().expect("layer render panicked")?);
+        }
+        Some(bufs)
+    })?;
+    // Summed in layer order so the result does not depend on thread timing.
+    for buf in rest_done {
+        out.iter_mut().zip(&buf).for_each(|(o, v)| *o += v);
     }
 
     let mut master = FxChain::new(&patch.master_effects, sr);
     let mut stage = OutputStage::new(patch.mode, sr);
     let mut limiter = Limiter::new(sr);
-    for s in out.iter_mut() {
-        let mut y = stage.process(master.process(*s) * patch.master_volume);
-        if !y.is_finite() {
-            y = 0.0;
+    for chunk in out.chunks_mut(CANCEL_CHECK) {
+        if cancelled() {
+            return None;
         }
-        *s = limiter.process(y);
+        for s in chunk {
+            let mut y = stage.process(master.process(*s) * patch.master_volume);
+            if !y.is_finite() {
+                y = 0.0;
+            }
+            *s = limiter.process(y);
+        }
     }
     trim_tail(&mut out, SILENCE);
-    out
+    Some(out)
+}
+
+fn render_layer(patch: &SoundPatch, layer: &Layer, index: usize, sr: f32, out: &mut [f32], cancelled: &(dyn Fn() -> bool + Sync)) -> bool {
+    let source = map_source_to_mode(&layer.source, patch.mode);
+    let seed = patch.seed.wrapping_add((index as u64).wrapping_mul(0x9E37_79B9));
+    let mut osc = Oscillator::new(source, patch.mode, sr, seed);
+    let mut eq = EqFilter::new(&layer.eq, sr);
+    let mut fx = FxChain::new(&layer.effects, sr);
+    let fixed_freq = pitch::constant_freq(&layer.pitch, patch.mode, sr);
+    let bit8 = patch.mode == Mode::Bit8;
+    for (c, chunk) in out.chunks_mut(CANCEL_CHECK).enumerate() {
+        if cancelled() {
+            return false;
+        }
+        for (j, sample) in chunk.iter_mut().enumerate() {
+            let t = (c * CANCEL_CHECK + j) as f32 / sr;
+            let freq = fixed_freq.unwrap_or_else(|| pitch::freq_at(&layer.pitch, patch.mode, t, sr));
+            let s = eq.process(osc.next(freq, t));
+            let mut a = env::amp(&layer.env, t);
+            if bit8 {
+                a = (a * 15.0).round() / 15.0;
+            }
+            *sample += fx.process(s * a) * layer.gain;
+        }
+    }
+    true
 }
 
 /// Drops trailing samples quieter than `threshold`.
@@ -123,6 +170,21 @@ mod tests {
         for v in render(&p, 44_100) {
             assert!(((v * 127.0) - (v * 127.0).round()).abs() < 1e-3, "{v}");
         }
+    }
+
+    #[test]
+    fn cancelled_render_returns_none() {
+        assert_eq!(render_cancellable(&SoundPatch::default(), 48_000, &|| true), None);
+    }
+
+    #[test]
+    fn two_layers_equal_one_layer_at_double_gain() {
+        let mut one = SoundPatch::default();
+        one.layers[0].gain = 1.0;
+        let mut two = one.clone();
+        two.layers[0].gain = 0.5;
+        two.layers.push(two.layers[0].clone());
+        assert_eq!(render(&one, 22_050), render(&two, 22_050));
     }
 
     #[test]
