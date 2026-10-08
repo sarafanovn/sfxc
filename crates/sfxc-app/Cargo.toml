@@ -1,0 +1,17 @@
+[package]
+name = "sfxc-app"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "sfxc"
+path = "src/main.rs"
+
+[dependencies]
+sfxc-core = { path = "../sfxc-core" }
+anyhow = "1"
+eframe = "0.36"
+cpal = "0.18"
+rusqlite = { version = "0.40", features = ["bundled"] }
+rfd = "0.17"
+directories = "6"
