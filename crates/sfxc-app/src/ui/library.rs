@@ -6,7 +6,13 @@ use super::theme::{palette, ThemeChoice, UI_SCALES};
 use super::widgets::{self, age, button, empty_state, icon_button, search_field, segmented, Kind};
 use super::theme::R_CONTROL;
 use super::Action;
-use sfxc_store::SoundSummary;
+use sfxc_store::{Membership, ProjectSummary, SoundSummary};
+
+pub struct ProjectView {
+    pub summary: ProjectSummary,
+    /// Sounds matching the current search, sorted by path.
+    pub members: Vec<Membership>,
+}
 
 const ROW_H: f32 = 46.0;
 
@@ -31,7 +37,11 @@ pub fn show(
     prefs: &mut Prefs,
     actions: &mut Vec<Action>,
 ) {
-    widgets::panel_header(ui, "Library", |_| {});
+    widgets::panel_header(ui, "Library", |ui| {
+        if icon_button(ui, icon::FOLDER_PLUS, "New project").clicked() {
+            actions.push(Action::AskNewProject { add_sound: None });
+        }
+    });
     ui.add_space(4.0);
     if search_field(ui, search, "Search name or tag").changed() {
         actions.push(Action::RefreshList);

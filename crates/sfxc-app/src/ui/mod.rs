@@ -8,6 +8,8 @@ mod export_dialog;
 mod library;
 mod material;
 mod order;
+mod project_actions;
+mod projects;
 mod theme;
 mod update;
 mod versions;
@@ -26,7 +28,9 @@ use sfxc_core::patch::{Mode, SoundPatch};
 use crate::audio::{self, Player};
 use crate::history::History;
 use crate::render_worker::{RenderJob, RenderResult, RenderWorker};
-use sfxc_store::{SoundSummary, Store, VersionInfo};
+use sfxc_store::{Membership, Project, SoundSummary, Store, VersionInfo};
+use project_actions::ProjectStatus;
+use projects::{MemberDialog, ProjectDialog};
 use export_dialog::ExportDialog;
 use library::Prefs;
 use update::UpdateState;
@@ -86,6 +90,9 @@ fn outside_change(db_draft: Option<&str>, saved_json: &str, local_json: &str) ->
 pub enum Action {
     NewSound,
     RefreshList,
+    AskNewProject { add_sound: Option<i64> },
+    AskAddToProject { project_id: i64, sound_id: i64 },
+    AskEditMembership { project_id: i64, sound_id: i64 },
     Open(i64),
     DuplicateSound(i64),
     AskDelete(i64),
@@ -147,6 +154,13 @@ pub struct SfxcApp {
     player: Player,
     worker: RenderWorker,
     sounds: Vec<SoundSummary>,
+    projects: Vec<library::ProjectView>,
+    /// Sounds in no project; empty while there are no projects.
+    unassigned: Vec<SoundSummary>,
+    project_status: ProjectStatus,
+    current_projects: Vec<(Project, Membership)>,
+    project_dialog: Option<ProjectDialog>,
+    member_dialog: Option<MemberDialog>,
     search: String,
     current: Option<Current>,
     current_version: Option<i64>,
@@ -182,6 +196,12 @@ impl SfxcApp {
             player: Player::new(),
             worker,
             sounds: Vec::new(),
+            projects: Vec::new(),
+            unassigned: Vec::new(),
+            project_status: ProjectStatus::default(),
+            current_projects: Vec::new(),
+            project_dialog: None,
+            member_dialog: None,
             search: String::new(),
             current: None,
             current_version: None,
@@ -251,6 +271,7 @@ impl SfxcApp {
                 self.store_error = None;
                 self.load_prefs();
                 self.refresh_list();
+                self.refresh_project_status();
                 if let Some(first) = self.sounds.first().map(|s| s.id) {
                     self.open_sound(first);
                 }
@@ -298,10 +319,20 @@ impl SfxcApp {
 
     fn refresh_list(&mut self) {
         let Some(store) = &self.store else { return };
-        let r = store.list_sounds(&self.search);
-        if let Some(list) = self.check(r) {
-            self.sounds = list;
+        let search = self.search.clone();
+        let r = (|| -> Result<_> {
+            let sounds = store.list_sounds(&search)?;
+            let projects = project_actions::load_projects(store, &search)?;
+            let unassigned = if projects.is_empty() { Vec::new() } else { store.unassigned_sounds(&search)? };
+            Ok((sounds, projects, unassigned))
+        })();
+        if let Some((sounds, projects, unassigned)) = self.check(r) {
+            self.sounds = sounds;
+            self.projects = projects;
+            self.unassigned = unassigned;
         }
+        // Cheap (no disk access) and keeps the editor's ● in step with the autosaved draft.
+        self.refresh_current_projects();
     }
 
     fn refresh_versions(&mut self) {
@@ -329,6 +360,7 @@ impl SfxcApp {
             self.edit_base = None;
             self.mode_note = None;
             self.refresh_versions();
+            self.refresh_current_projects();
             self.request_render();
         }
     }
@@ -442,6 +474,7 @@ impl SfxcApp {
                 self.rendered = None;
             }
             self.refresh_list();
+            self.refresh_project_status();
         }
     }
 
@@ -612,6 +645,9 @@ impl SfxcApp {
         match action {
             Action::NewSound => self.new_sound(),
             Action::RefreshList => self.refresh_list(),
+            Action::AskNewProject { add_sound } => self.ask_new_project(add_sound),
+            Action::AskAddToProject { project_id, sound_id } => self.ask_add_to_project(project_id, sound_id),
+            Action::AskEditMembership { project_id, sound_id } => self.ask_edit_membership(project_id, sound_id),
             Action::Open(id) => self.open_sound(id),
             Action::DuplicateSound(id) => self.duplicate_sound(id),
             Action::AskDelete(id) => self.confirm_delete = Some(id),
@@ -773,6 +809,7 @@ impl SfxcApp {
             return;
         }
         self.refresh_list();
+        self.refresh_project_status();
         let Some((id, saved, local)) = self.current.as_ref().map(|c| (c.id, c.saved_json.clone(), c.patch.to_json())) else { return };
         let Some(store) = &self.store else { return };
         let r = store.draft_json_if_exists(id);
@@ -943,6 +980,24 @@ impl eframe::App for SfxcApp {
         }
         let mut before = None;
         let mut rate_changed = false;
+        let chips: Vec<editor::ProjectChip> = self
+            .current_projects
+            .iter()
+            .map(|(p, m)| editor::ProjectChip {
+                project_id: p.id,
+                project: &p.name,
+                path: &m.rel_path,
+                changed: m.changed(),
+                missing: self.project_status.missing.get(&(p.id, m.sound_id)).copied().unwrap_or(false),
+            })
+            .collect();
+        let addable: Vec<(i64, &str)> = self
+            .projects
+            .iter()
+            .map(|v| &v.summary.project)
+            .filter(|p| !self.current_projects.iter().any(|(q, _)| q.id == p.id))
+            .map(|p| (p.id, p.name.as_str()))
+            .collect();
         egui::CentralPanel::default().frame(egui::Frame::new().fill(p.canvas)).show(ui, |ui| match self.current.as_mut() {
             Some(cur) => {
                 let snapshot = cur.patch.clone();
@@ -954,6 +1009,8 @@ impl eframe::App for SfxcApp {
                     can_undo: self.history.can_undo(),
                     can_redo: self.history.can_redo(),
                     audio_error: self.player.error(),
+                    projects: chips,
+                    addable,
                 };
                 editor::show(ui, cur, &view, &mut self.export_settings, &mut self.mode_note, &mut actions);
                 if cur.patch != snapshot {
@@ -989,6 +1046,7 @@ impl eframe::App for SfxcApp {
             }
         }
         self.dialogs(&ctx);
+        self.project_dialogs(&ctx);
         for a in actions {
             self.apply(a);
         }
@@ -1019,6 +1077,19 @@ mod tests {
             saved_json: String::new(),
             changed_at: None,
         }
+    }
+
+    #[test]
+    fn a_new_project_with_a_sound_shows_up_in_the_lists() {
+        let s = Store::open_in_memory().unwrap();
+        let id = s.create_sound("laser", &SoundPatch::default(), 1).unwrap();
+        let pid = s.create_project("Game", "/tmp/game", 1).unwrap();
+        let options = sfxc_store::MemberOptions::default();
+        let path = s.default_member_path(pid, "laser", &options).unwrap();
+        s.add_to_project(pid, id, &path, &options).unwrap();
+        let views = project_actions::load_projects(&s, "").unwrap();
+        assert_eq!(views[0].members[0].rel_path, "laser.wav");
+        assert!(s.unassigned_sounds("").unwrap().is_empty());
     }
 
     #[test]
@@ -1087,6 +1158,8 @@ mod render_smoke {
                     can_undo: false,
                     can_redo: false,
                     audio_error: None,
+                    projects: Vec::new(),
+                    addable: Vec::new(),
                 };
                 editor::show(ui, cur, &view, &mut ExportDialog::default(), &mut note, actions);
             });
@@ -1282,6 +1355,8 @@ mod render_smoke {
                             can_undo: false,
                             can_redo: false,
                             audio_error: None,
+                            projects: Vec::new(),
+                            addable: Vec::new(),
                         };
                         editor::show(ui, &mut cur, &view, &mut ExportDialog::default(), &mut note, &mut Vec::new());
                     });
