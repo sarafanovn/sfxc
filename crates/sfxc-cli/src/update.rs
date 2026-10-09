@@ -3,19 +3,26 @@ use std::path::PathBuf;
 use std::thread::JoinHandle;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Value};
 use sfxc_update::{Part, CURRENT};
 
 /// `sfxc-cli update [--check]`: always asks GitHub (the cache is only for the automatic hint), then installs
-/// unless `--check`.
+/// unless `--check`. A Homebrew install is left to `brew upgrade`, so there is never a second copy.
 pub fn run(check_only: bool) -> Result<Value> {
+    let brew = std::env::current_exe().ok().and_then(|exe| sfxc_update::brew_for_cli(&exe));
     let latest = sfxc_update::fetch_latest(Duration::from_secs(10)).map_err(|e| anyhow!(e))?;
     sfxc_update::write_cache(&sfxc_store::update_cache_path(), now(), latest.as_deref());
     let available = latest.as_deref().is_some_and(|v| sfxc_update::is_newer(v, CURRENT));
     let mut out = json!({ "current": CURRENT, "latest": latest, "update_available": available, "updated": false });
+    if brew.is_some() {
+        out["installed_with"] = json!("homebrew");
+    }
     if !available || check_only {
         return Ok(out);
+    }
+    if brew.is_some() {
+        bail!("sfxc-cli was installed with Homebrew; run `{}`", sfxc_update::brew_command(Part::Cli));
     }
     sfxc_update::install(Part::Cli).map_err(|e| anyhow!("update failed: {e}"))?;
     let installed = PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".local/bin/sfxc-cli");
@@ -43,7 +50,9 @@ pub fn start_hint() -> Option<JoinHandle<Option<String>>> {
 
 pub fn finish_hint(hint: Option<JoinHandle<Option<String>>>) {
     if let Some(version) = hint.and_then(|h| h.join().ok().flatten()) {
-        eprintln!("sfxc-cli {version} is available (you have {CURRENT}). Run `sfxc-cli update`.");
+        let brew = std::env::current_exe().ok().and_then(|exe| sfxc_update::brew_for_cli(&exe));
+        let how = if brew.is_some() { sfxc_update::brew_command(Part::Cli) } else { "sfxc-cli update" };
+        eprintln!("sfxc-cli {version} is available (you have {CURRENT}). Run `{how}`.");
     }
 }
 

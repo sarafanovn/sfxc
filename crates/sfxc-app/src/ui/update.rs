@@ -31,13 +31,31 @@ pub fn start_check(ctx: &egui::Context) -> UpdateState {
     if spawned.is_ok() { UpdateState::Checking(rx) } else { UpdateState::Idle }
 }
 
-/// The bundle install.sh manages. Only that copy is replaced in place; any other copy (a dev build, one
-/// dragged to /Applications) gets the release page instead, so the update never lands somewhere unexpected.
-fn managed_bundle() -> Option<PathBuf> {
-    let exe = std::env::current_exe().ok()?.canonicalize().ok()?;
-    let bundle = exe.parent()?.parent()?.parent()?;
-    let managed = PathBuf::from(std::env::var_os("HOME")?).join("Applications/sfxc.app").canonicalize().ok()?;
-    (bundle == managed).then(|| bundle.to_path_buf())
+/// How this copy can update itself.
+enum Updater {
+    /// `~/Applications/sfxc.app`, put there by install.sh.
+    Script(PathBuf),
+    /// `/Applications/sfxc.app` from the Homebrew cask.
+    Brew { brew: PathBuf, bundle: PathBuf },
+    /// Anything else (a dev build, a copy dragged somewhere): only the release page, so an update never lands
+    /// somewhere unexpected.
+    Manual,
+}
+
+fn updater() -> Updater {
+    let bundle = || -> Option<PathBuf> {
+        let exe = std::env::current_exe().ok()?.canonicalize().ok()?;
+        Some(exe.parent()?.parent()?.parent()?.to_path_buf())
+    };
+    let Some(bundle) = bundle() else { return Updater::Manual };
+    if let Some(brew) = sfxc_update::brew_for_app(&bundle) {
+        return Updater::Brew { brew, bundle };
+    }
+    let script = std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Applications/sfxc.app"));
+    match script.and_then(|p| p.canonicalize().ok()) {
+        Some(p) if p == bundle => Updater::Script(bundle),
+        _ => Updater::Manual,
+    }
 }
 
 impl SfxcApp {
@@ -77,10 +95,10 @@ impl SfxcApp {
         let layout = egui::Layout::right_to_left(egui::Align::Center);
         let resp = ui.scope_builder(egui::UiBuilder::new().max_rect(area).layout(layout), |ui| widgets::badge(ui, &text, widgets::Tone::Accent)).inner;
         let UpdateState::Available(version) = &self.update else { return };
-        let tip = if managed_bundle().is_some() {
-            format!("Download {version}, install it to ~/Applications and restart sfxc")
-        } else {
-            format!("Open the {version} release page (this copy is not the one in ~/Applications)")
+        let tip = match updater() {
+            Updater::Script(_) => format!("Download {version}, install it to ~/Applications and restart sfxc"),
+            Updater::Brew { .. } => format!("Run `{}` and restart sfxc", sfxc_update::brew_command(Part::App)),
+            Updater::Manual => format!("Open the {version} release page (this copy was not installed by install.sh or Homebrew)"),
         };
         if resp.interact(egui::Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(tip).clicked() {
             self.start_install();
@@ -90,11 +108,15 @@ impl SfxcApp {
     fn start_install(&mut self) {
         let UpdateState::Available(version) = &self.update else { return };
         let version = version.clone();
-        let Some(bundle) = managed_bundle() else {
-            if let Err(e) = Command::new("open").arg(sfxc_update::release_page(&version)).spawn() {
-                self.toast(format!("Could not open the release page: {e}"));
+        let (bundle, brew) = match updater() {
+            Updater::Script(bundle) => (bundle, None),
+            Updater::Brew { brew, bundle } => (bundle, Some(brew)),
+            Updater::Manual => {
+                if let Err(e) = Command::new("open").arg(sfxc_update::release_page(&version)).spawn() {
+                    self.toast(format!("Could not open the release page: {e}"));
+                }
+                return;
             }
-            return;
         };
         self.flush_draft();
         let (tx, rx) = mpsc::channel();
@@ -102,7 +124,11 @@ impl SfxcApp {
         std::thread::Builder::new()
             .name("sfxc-update-install".into())
             .spawn(move || {
-                let _ = tx.send(sfxc_update::install(Part::App));
+                let result = match brew {
+                    Some(brew) => sfxc_update::brew_upgrade(&brew, Part::App),
+                    None => sfxc_update::install(Part::App),
+                };
+                let _ = tx.send(result);
                 ctx.request_repaint();
             })
             .expect("spawn update thread");

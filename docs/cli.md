@@ -5,6 +5,8 @@ Make and edit sfxc sounds from a terminal. Sounds go into the same library as th
 ## Install
 
 ```bash
+brew install sarafanovn/tap/sfxc-cli
+# or, from a checkout:
 cargo install --path crates/sfxc-cli
 ```
 
@@ -12,7 +14,7 @@ cargo install --path crates/sfxc-cli
 
 Every command prints JSON. Errors go to stderr as one `error: …` line with exit code 1.
 
-`sfxc-cli update` installs the latest release to `~/.local/bin`; `update --check` only prints `current`, `latest` and `update_available`. When stderr is a terminal, other commands may add one "is available" line to stderr (checked at most once a day; `SFXC_NO_UPDATE_CHECK=1` turns it off). Without a terminal there is no check and no extra output.
+`sfxc-cli update` installs the latest release to `~/.local/bin` (a Homebrew install reports `"installed_with": "homebrew"` and is updated with `brew upgrade sfxc-cli`); `update --check` only prints `current`, `latest` and `update_available`. When stderr is a terminal, other commands may add one "is available" line to stderr (checked at most once a day; `SFXC_NO_UPDATE_CHECK=1` turns it off). Without a terminal there is no check and no extra output.
 
 ## Workflow
 

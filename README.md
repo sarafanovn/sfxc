@@ -43,11 +43,18 @@ curl -fsSL https://raw.githubusercontent.com/sarafanovn/sfxc/main/install.sh | b
 
 A small menu lets you toggle `sfxc.app` (to `~/Applications`) and `sfxc-cli` (to `~/.local/bin`). It downloads the latest release, or builds from source if there is none (needs Rust). Remove everything with `... | bash -s -- --uninstall`; your library is kept.
 
+Or with Homebrew:
+
+```sh
+brew install --cask sarafanovn/tap/sfxc   # the app, to /Applications
+brew install sarafanovn/tap/sfxc-cli      # the CLI, built from source
+```
+
 ### Updates
 
-Once a day the app checks GitHub for a newer release and shows **Update to …** in the title bar; a click installs it and restarts sfxc. `sfxc-cli update` updates the CLI (`--check` only reports). Running the install command again also updates. Set `SFXC_NO_UPDATE_CHECK=1` to turn the automatic check off.
+Once a day the app checks GitHub for a newer release and shows **Update to …** in the title bar; a click installs it and restarts sfxc (through `brew upgrade` when the app came from Homebrew). `sfxc-cli update` updates the CLI (`--check` only reports; a Homebrew install is updated with `brew upgrade sfxc-cli`). Running the install command again also updates. Set `SFXC_NO_UPDATE_CHECK=1` to turn the automatic check off.
 
-Releases are built by GitHub Actions when a `v*` tag matching the version in `Cargo.toml` is pushed.
+Releases are built by GitHub Actions when a `v*` tag matching the version in `Cargo.toml` is pushed; the same run bumps the cask and formula in [sarafanovn/homebrew-tap](https://github.com/sarafanovn/homebrew-tap).
 
 ### Build from source
 

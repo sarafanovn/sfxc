@@ -3,7 +3,7 @@
 //! Everything goes through the system `curl` and `bash` (both ship with macOS), so no HTTP or TLS stack is linked.
 //! `SFXC_NO_UPDATE_CHECK=1` turns off the automatic checks; an explicit `sfxc-cli update` still works.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -102,6 +102,46 @@ pub fn check(cache: &Path, now: u64, timeout: Duration) -> Option<String> {
     latest.filter(|v| is_newer(v, CURRENT))
 }
 
+const BREW_PREFIXES: [&str; 2] = ["/opt/homebrew", "/usr/local"];
+
+/// The `brew` that owns this sfxc-cli, when it runs from a Homebrew Cellar (`<prefix>/Cellar/sfxc-cli/…`).
+pub fn brew_for_cli(exe: &Path) -> Option<PathBuf> {
+    let exe = exe.canonicalize().ok()?;
+    let prefix = exe.to_str()?.split_once("/Cellar/sfxc-cli/")?.0;
+    let brew = Path::new(prefix).join("bin/brew");
+    brew.is_file().then_some(brew)
+}
+
+/// The `brew` that owns this app, when it is `/Applications/sfxc.app` and the `sfxc` cask is installed.
+pub fn brew_for_app(bundle: &Path) -> Option<PathBuf> {
+    if bundle.canonicalize().ok()? != Path::new("/Applications/sfxc.app") {
+        return None;
+    }
+    BREW_PREFIXES
+        .iter()
+        .map(Path::new)
+        .find(|p| p.join("Caskroom/sfxc").is_dir() && p.join("bin/brew").is_file())
+        .map(|p| p.join("bin/brew"))
+}
+
+/// The command a person would type to update this part through Homebrew.
+pub fn brew_command(part: Part) -> &'static str {
+    match part {
+        Part::App => "brew upgrade --cask sfxc",
+        Part::Cli => "brew upgrade sfxc-cli",
+    }
+}
+
+/// Updates `part` with `brew upgrade`; brew refreshes the tap first.
+pub fn brew_upgrade(brew: &Path, part: Part) -> Result<(), String> {
+    let mut cmd = Command::new(brew);
+    match part {
+        Part::App => cmd.args(["upgrade", "--cask", "sfxc"]),
+        Part::Cli => cmd.args(["upgrade", "sfxc-cli"]),
+    };
+    run_quietly(cmd.env("HOMEBREW_NO_ENV_HINTS", "1"))
+}
+
 /// Downloads and installs the latest release of `part` with install.sh. On failure the error carries the end of
 /// the installer's output.
 pub fn install(part: Part) -> Result<(), String> {
@@ -110,19 +150,21 @@ pub fn install(part: Part) -> Result<(), String> {
         Part::Cli => "--cli",
     };
     let script = format!("https://raw.githubusercontent.com/{REPO}/main/install.sh");
-    let out = Command::new("bash")
-        .args(["-c", r#"set -o pipefail; curl -fsSL "$1" | bash -s -- "$2""#, "sfxc-update", &script, flag])
-        .env("SFXC_NONINTERACTIVE", "1")
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|e| format!("could not run bash: {e}"))?;
+    let mut cmd = Command::new("bash");
+    cmd.args(["-c", r#"set -o pipefail; curl -fsSL "$1" | bash -s -- "$2""#, "sfxc-update", &script, flag]);
+    run_quietly(cmd.env("SFXC_NONINTERACTIVE", "1"))
+}
+
+fn run_quietly(cmd: &mut Command) -> Result<(), String> {
+    let name = cmd.get_program().to_string_lossy().into_owned();
+    let out = cmd.stdin(Stdio::null()).output().map_err(|e| format!("could not run {name}: {e}"))?;
     if out.status.success() {
         return Ok(());
     }
     let log = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
     let tail: Vec<&str> = log.lines().filter(|l| !l.trim().is_empty()).collect();
     let tail = tail[tail.len().saturating_sub(3)..].join("; ");
-    Err(if tail.is_empty() { format!("installer exited with {}", out.status) } else { tail })
+    Err(if tail.is_empty() { format!("{name} exited with {}", out.status) } else { tail })
 }
 
 #[cfg(test)]
