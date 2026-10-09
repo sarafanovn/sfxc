@@ -15,6 +15,7 @@ mod update;
 mod versions;
 mod widgets;
 
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -115,6 +116,12 @@ pub enum Action {
     SetAutoplay(bool),
     SaveSectionOrder(String),
     SetAccent { hue: f32, persist: bool },
+    ToggleSection(String),
+    AskRenameProject(i64),
+    AskProjectFolder(i64),
+    AskDeleteProject(i64),
+    RemoveFromProject { project_id: i64, sound_id: i64 },
+    NewSoundIn(i64),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -158,6 +165,9 @@ pub struct SfxcApp {
     /// Sounds in no project; empty while there are no projects.
     unassigned: Vec<SoundSummary>,
     project_status: ProjectStatus,
+    collapsed: HashSet<String>,
+    export_errors: HashMap<(i64, i64), String>,
+    was_focused: bool,
     current_projects: Vec<(Project, Membership)>,
     project_dialog: Option<ProjectDialog>,
     member_dialog: Option<MemberDialog>,
@@ -199,6 +209,9 @@ impl SfxcApp {
             projects: Vec::new(),
             unassigned: Vec::new(),
             project_status: ProjectStatus::default(),
+            collapsed: HashSet::new(),
+            export_errors: HashMap::new(),
+            was_focused: true,
             current_projects: Vec::new(),
             project_dialog: None,
             member_dialog: None,
@@ -249,6 +262,9 @@ impl SfxcApp {
         }
         if let Some(h) = store.setting("accent_hue").ok().flatten().and_then(|s| accent::parse_hue(&s)) {
             self.prefs.accent_hue = h;
+        }
+        if let Some(c) = store.setting("library_collapsed").ok().flatten() {
+            self.collapsed = c.split(',').filter(|k| !k.is_empty()).map(String::from).collect();
         }
         if let Some(saved) = store.setting("section_order").ok().flatten() {
             // The old "filter" card became the equalizer; keep its place in a saved order.
@@ -365,8 +381,8 @@ impl SfxcApp {
         }
     }
 
-    fn new_sound(&mut self) {
-        let Some(store) = &self.store else { return };
+    fn new_sound(&mut self) -> Option<i64> {
+        let store = self.store.as_ref()?;
         let name = format!("sound {}", self.sounds.len() + 1);
         let patch = generators::generate(Category::BlipSelect, Mode::Modern, fresh_seed());
         let r = store.create_sound(&name, &patch, now_secs());
@@ -374,6 +390,9 @@ impl SfxcApp {
             self.search.clear();
             self.refresh_list();
             self.open_sound(id);
+            Some(id)
+        } else {
+            None
         }
     }
 
@@ -643,8 +662,27 @@ impl SfxcApp {
 
     fn apply(&mut self, action: Action) {
         match action {
-            Action::NewSound => self.new_sound(),
+            Action::NewSound => {
+                self.new_sound();
+            }
             Action::RefreshList => self.refresh_list(),
+            Action::ToggleSection(key) => {
+                if !self.collapsed.remove(&key) {
+                    self.collapsed.insert(key);
+                }
+                let mut keys: Vec<&str> = self.collapsed.iter().map(String::as_str).collect();
+                keys.sort_unstable();
+                let value = keys.join(",");
+                self.save_pref("library_collapsed", &value);
+            }
+            Action::AskRenameProject(id) => self.ask_rename_project(id),
+            Action::AskProjectFolder(id) => self.ask_project_folder(id),
+            Action::AskDeleteProject(id) => self.ask_delete_project(id),
+            Action::RemoveFromProject { project_id, sound_id } => self.remove_from_project(project_id, sound_id),
+            Action::NewSoundIn(id) => {
+                self.collapsed.remove(&library::Section::Project(id).key());
+                self.new_sound_in(id);
+            }
             Action::AskNewProject { add_sound } => self.ask_new_project(add_sound),
             Action::AskAddToProject { project_id, sound_id } => self.ask_add_to_project(project_id, sound_id),
             Action::AskEditMembership { project_id, sound_id } => self.ask_edit_membership(project_id, sound_id),
@@ -849,6 +887,11 @@ impl SfxcApp {
             self.maybe_auto_version();
         }
         ctx.request_repaint_after(AUTO_VERSION_CHECK);
+        let focused = ctx.input(|i| i.viewport().focused.unwrap_or(true));
+        if focused && !self.was_focused {
+            self.refresh_project_status();
+        }
+        self.was_focused = focused;
         if ctx.input(|i| i.viewport().close_requested()) {
             self.flush_draft();
         }
@@ -964,7 +1007,16 @@ impl eframe::App for SfxcApp {
 
         egui::Panel::left("library").resizable(false).exact_size(268.0).show_separator_line(false).frame(side(18)).show(ui, |ui| {
             let current = self.current.as_ref().map(|c| c.id);
-            library::show(ui, &self.sounds, &mut self.search, current, now, &mut self.prefs, &mut actions);
+            let view = library::LibraryView {
+                sounds: &self.sounds,
+                unassigned: &self.unassigned,
+                projects: &self.projects,
+                status: &self.project_status,
+                export_errors: &self.export_errors,
+                exporting: None,
+                collapsed: &self.collapsed,
+            };
+            library::show(ui, &view, &mut self.search, current, now, &mut self.prefs, &mut actions);
         });
         egui::Panel::right("versions")
             .resizable(false)

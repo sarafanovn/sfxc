@@ -546,18 +546,6 @@ fn eq_section(ui: &mut Ui, layer: &mut Layer, grip: Grip) -> Option<(usize, usiz
     })
 }
 
-#[cfg(test)]
-mod tag_tests {
-    use super::parse_tags;
-
-    #[test]
-    fn tags_split_on_whitespace_and_commas_without_duplicates() {
-        assert_eq!(parse_tags("ui retro"), vec!["ui", "retro"]);
-        assert_eq!(parse_tags(" #ui, Retro ,ui  RETRO "), vec!["ui", "Retro"]);
-        assert!(parse_tags("  ,, ").is_empty());
-    }
-}
-
 fn project_row(ui: &mut Ui, sound_id: i64, view: &View, actions: &mut Vec<Action>) {
     let p = palette(ui);
     ui.add_space(4.0);
@@ -591,4 +579,16 @@ fn project_row(ui: &mut Ui, sound_id: i64, view: &View, actions: &mut Vec<Action
             }
         });
     });
+}
+
+#[cfg(test)]
+mod tag_tests {
+    use super::parse_tags;
+
+    #[test]
+    fn tags_split_on_whitespace_and_commas_without_duplicates() {
+        assert_eq!(parse_tags("ui retro"), vec!["ui", "retro"]);
+        assert_eq!(parse_tags(" #ui, Retro ,ui  RETRO "), vec!["ui", "Retro"]);
+        assert!(parse_tags("  ,, ").is_empty());
+    }
 }

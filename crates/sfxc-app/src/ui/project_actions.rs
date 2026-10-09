@@ -143,8 +143,8 @@ impl SfxcApp {
 
     /// A new sound, straight into the project with the default path.
     pub(super) fn new_sound_in(&mut self, project_id: i64) {
-        self.new_sound();
-        let (Some(store), Some(id)) = (&self.store, self.current.as_ref().map(|c| c.id)) else { return };
+        let Some(id) = self.new_sound() else { return };
+        let Some(store) = &self.store else { return };
         let r = (|| -> Result<()> {
             let name = store.sound_meta(id)?.0;
             let options = MemberOptions::default();
