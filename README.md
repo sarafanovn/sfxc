@@ -17,7 +17,7 @@ A small native synthesizer for game SFX, built in Rust. Retro 8-bit and 16-bit c
 sfxc is in the spirit of sfxr and bfxr: click a category, get a coin, a laser or an explosion, tweak a few sliders, export. It adds what those tools leave out.
 
 - **Sounds are never baked.** Every sound is stored as synthesis parameters with a full version history. Open one months later, change the pitch, re-export.
-- **Made for you and your agent.** `sfxc-cli` works on the same library as the app, so an agent can create and export sounds straight into your game, and you fine-tune them in the GUI.
+- **Made for you and your agent.** `sfxc-cli` works on the same library as the app, so an agent can create sounds and write them into your game's project, and you fine-tune them in the GUI.
 - **Authentic or modern, per sound.** Clean modern synthesis, NES-style 8-bit or 16-bit, with effects stacked in any order.
 - **Reproducible.** The same patch always renders identical audio.
 
@@ -78,6 +78,7 @@ The library lives in `~/Library/Application Support/sfxc/library.db`. Set `SFXC_
 3. Adjust Pitch, Envelope and Equalizer. With Auto-play on, the sound plays when you release a slider. Double-click a slider to reset it.
 4. Add effects and drag them into order.
 5. Save a version with `⌘S`, export with `⌘E`.
+6. Put sounds into a **project** — a folder in your game: the folder icon above the library, or **Add to project** under a sound's name. Each sound gets its own path and export settings there. The export button on a project (or `⇧⌘E`) writes only the sounds that changed since the last project export.
 
 | Key | Action |
 |---|---|
@@ -85,9 +86,12 @@ The library lives in `~/Library/Application Support/sfxc/library.db`. Set `SFXC_
 | `M` | Mutate |
 | `⌘N` / `⌘D` | New sound / duplicate |
 | `⌘S` / `⌘E` | Save version / export |
+| `⇧⌘E` | Export the open sound's project |
 | `⌘Z` / `⇧⌘Z` | Undo / redo |
 
 **Versions.** The draft autosaves continuously and is not a version. A version is created on `⌘S`, on export, and after 5 minutes of unsaved changes. Any version can be restored or duplicated as a new sound; restoring saves the current state first, so nothing is lost. Undo is per session and independent of versions.
+
+**Projects.** A sound can be in several projects, with a different path and format in each. Sounds in no project are listed under *No project*. A dot marks a sound changed since the last project export, a warning sign a file missing on disk. sfxc never deletes files: after a rename or a new folder the old file stays.
 
 WAV bit depth follows the mode (8, 16 or 24-bit).
 
@@ -103,11 +107,13 @@ sfxc-cli new --name coin --category coin           # generate a sound (--mode 8b
 sfxc-cli analyze coin                              # peak, rms, brightness, envelope (for agents that can't listen)
 sfxc-cli set coin layers.0.pitch.base_freq=880 mode=Bit8
 sfxc-cli fx add coin Delay
-sfxc-cli export coin --to assets/sfx/coin.ogg      # remembers the path as a link
-sfxc-cli export --linked                           # re-export every linked sound
+sfxc-cli project new "My game" --root ~/dev/my-game/assets    # once per game
+sfxc-cli project add "My game" coin --path sfx/coin.ogg
+sfxc-cli project export "My game"                  # writes only what changed
+sfxc-cli export coin --to /tmp/coin.wav            # a one-off file
 ```
 
-Also available: `list`, `show`, `mutate`, `put`, `fx remove`, `rename`, `tag`, `versions`, `restore`. The full guide for agents is in [docs/cli.md](docs/cli.md).
+Also available: `list`, `show`, `mutate`, `put`, `fx remove`, `rename`, `tag`, `versions`, `restore`, `project list|show|set|remove|rename|set-root|delete`. The full guide for agents is in [docs/cli.md](docs/cli.md).
 
 ## Project layout
 
@@ -134,7 +140,6 @@ Please run both before opening a pull request.
 
 - Use `sfxc-core` inside a game to generate sounds at runtime
 - Multi-layer editing in the app (the data model already supports up to 4 layers)
-- Export paths bound to a game folder from the GUI
 - User presets and templates
 - Keyboard / MIDI play
 - Sample import
