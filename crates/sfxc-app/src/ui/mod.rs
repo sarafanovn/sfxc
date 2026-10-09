@@ -30,8 +30,8 @@ use crate::audio::{self, Player};
 use crate::history::History;
 use crate::render_worker::{RenderJob, RenderResult, RenderWorker};
 use sfxc_store::{Membership, Project, SoundSummary, Store, VersionInfo};
-use project_actions::ProjectStatus;
-use projects::{MemberDialog, ProjectDialog};
+use project_actions::{ProjectJob, ProjectStatus};
+use projects::{ExportPrompt, MemberDialog, ProjectDialog};
 use export_dialog::ExportDialog;
 use library::Prefs;
 use update::UpdateState;
@@ -110,6 +110,8 @@ pub enum Action {
     DuplicateVersion(i64),
     DuplicateCurrent,
     Export,
+    ExportProject(i64),
+    ExportCurrentProject,
     SetTheme(ThemeChoice),
     SetScale(f32),
     SaveVolume,
@@ -186,6 +188,8 @@ pub struct SfxcApp {
     confirm_delete: Option<i64>,
     toasts: Vec<Toast>,
     export_job: Option<ExportJob>,
+    project_job: Option<ProjectJob>,
+    export_prompt: Option<ExportPrompt>,
     last_auto_check: Instant,
     data_version: Option<i64>,
     last_sync: Instant,
@@ -230,6 +234,8 @@ impl SfxcApp {
             confirm_delete: None,
             toasts: Vec::new(),
             export_job: None,
+            project_job: None,
+            export_prompt: None,
             last_auto_check: Instant::now(),
             data_version: None,
             last_sync: Instant::now(),
@@ -514,7 +520,7 @@ impl SfxcApp {
     }
 
     fn run_export(&mut self) {
-        if self.export_job.is_some() {
+        if self.export_busy() {
             return self.toast("An export is already running");
         }
         let (Some(store), Some(cur)) = (&self.store, &self.current) else { return };
@@ -708,6 +714,8 @@ impl SfxcApp {
             Action::Restore(v) => self.restore(v),
             Action::DuplicateVersion(v) => self.duplicate_version(v),
             Action::DuplicateCurrent => self.duplicate_current(),
+            Action::ExportProject(id) => self.start_project_export(id),
+            Action::ExportCurrentProject => self.export_current_project(),
             Action::Export => {
                 if self.current.is_some() {
                     self.run_export();
@@ -745,6 +753,7 @@ impl SfxcApp {
     fn poll(&mut self, ctx: &egui::Context) {
         self.player.maintain();
         self.finish_export();
+        self.finish_project_export();
         if !self.player.is_available() {
             ctx.request_repaint_after(Duration::from_secs(3));
         }
@@ -772,6 +781,9 @@ impl SfxcApp {
             }
             if i.consume_key(Modifiers::COMMAND, Key::S) {
                 actions.push(Action::AskVersionNote);
+            }
+            if i.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, Key::E) {
+                actions.push(Action::ExportCurrentProject);
             }
             if i.consume_key(Modifiers::COMMAND, Key::E) {
                 actions.push(Action::Export);
@@ -1013,7 +1025,7 @@ impl eframe::App for SfxcApp {
                 projects: &self.projects,
                 status: &self.project_status,
                 export_errors: &self.export_errors,
-                exporting: None,
+                exporting: self.project_job.as_ref().map(|j| j.project_id),
                 collapsed: &self.collapsed,
             };
             library::show(ui, &view, &mut self.search, current, now, &mut self.prefs, &mut actions);

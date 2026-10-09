@@ -271,14 +271,32 @@ fn section_header(
     open
 }
 
-fn header_buttons(ui: &mut egui::Ui, pv: &ProjectView, _view: &LibraryView, actions: &mut Vec<Action>) {
+fn header_buttons(ui: &mut egui::Ui, pv: &ProjectView, view: &LibraryView, actions: &mut Vec<Action>) {
     let id = pv.summary.project.id;
+    if view.exporting == Some(id) {
+        ui.add(egui::Spinner::new().size(14.0));
+    } else {
+        let missing = view.status.missing_count.get(&id).copied().unwrap_or(0);
+        let changed = pv.summary.changed;
+        let tip = match (changed, missing) {
+            (0, 0) => "Everything is exported".to_string(),
+            (c, 0) => format!("Export {c} changed sound{}", if c == 1 { "" } else { "s" }),
+            (c, m) => format!("Export {c} changed; {m} missing on disk"),
+        };
+        let r = ui.add_enabled_ui(changed + missing > 0, |ui| icon_button(ui, icon::EXPORT, &tip).on_disabled_hover_text(&tip)).inner;
+        if r.clicked() {
+            actions.push(Action::ExportProject(id));
+        }
+    }
     if icon_button(ui, icon::PLUS, "New sound in this project").clicked() {
         actions.push(Action::NewSoundIn(id));
     }
 }
 
 fn project_menu(ui: &mut egui::Ui, id: i64, actions: &mut Vec<Action>) {
+    if ui.button(format!("{}  Export", icon::EXPORT)).clicked() {
+        actions.push(Action::ExportProject(id));
+    }
     if ui.button(format!("{}  Rename…", icon::PENCIL_SIMPLE)).clicked() {
         actions.push(Action::AskRenameProject(id));
     }

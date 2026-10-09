@@ -1,13 +1,16 @@
 //! The app's side of projects: keeping project data fresh and applying the dialogs.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::mpsc;
 
 use anyhow::{Context, Result};
 use eframe::egui;
+use sfxc_store::project_export::{self, ExportJob, ExportPlan, ItemResult};
 use sfxc_store::{MemberOptions, Store};
 
 use super::library::ProjectView;
-use super::projects::{self, MemberDialog, ProjectDialog};
+use super::projects::{self, ExportPrompt, MemberDialog, ProjectDialog, PromptChoice};
 use super::{now_secs, SfxcApp};
 
 #[derive(Default)]
@@ -18,6 +21,24 @@ pub struct ProjectStatus {
     pub missing_count: HashMap<i64, usize>,
     /// The projects each sound is in.
     pub member_of: HashMap<i64, Vec<i64>>,
+}
+
+pub struct ProjectJob {
+    pub project_id: i64,
+    project: String,
+    /// Items that failed before writing (an unreadable version).
+    early: Vec<ItemResult>,
+    done: mpsc::Receiver<(Vec<ExportJob>, Vec<Result<()>>)>,
+}
+
+/// `(all fine, toast text)`.
+pub fn export_summary(project: &str, items: &[ItemResult]) -> (bool, String) {
+    let failed: Vec<&ItemResult> = items.iter().filter(|i| i.error.is_some()).collect();
+    let ok = items.len() - failed.len();
+    match failed.first() {
+        None => (true, format!("Exported {ok} sound{} to {project}", if ok == 1 { "" } else { "s" })),
+        Some(f) => (false, format!("Exported {ok} to {project}, {} failed: {}: {}", failed.len(), f.name, f.error.as_deref().unwrap_or_default())),
+    }
 }
 
 /// Every project with its sounds matching `search`.
@@ -196,6 +217,106 @@ impl SfxcApp {
         Ok(())
     }
 
+    pub(super) fn export_busy(&self) -> bool {
+        self.export_job.is_some() || self.project_job.is_some()
+    }
+
+    pub(super) fn start_project_export(&mut self, project_id: i64) {
+        if self.export_busy() {
+            return self.toast("An export is already running");
+        }
+        // The open sound's last edits may still be only in memory.
+        self.flush_draft();
+        let Some(store) = &self.store else { return };
+        let r = project_export::plan(store, project_id);
+        let Some(plan) = self.check(r) else { return };
+        if plan.changed.is_empty() && plan.missing.is_empty() {
+            return self.toast_ok(format!("{} is up to date", plan.project.name));
+        }
+        if !plan.root_exists {
+            self.export_prompt = Some(ExportPrompt::CreateRoot { plan });
+            return;
+        }
+        self.ask_missing_or_launch(plan, false);
+    }
+
+    fn ask_missing_or_launch(&mut self, plan: ExportPlan, create_root: bool) {
+        if plan.missing.is_empty() {
+            self.launch_project_export(plan, false, create_root);
+        } else {
+            self.export_prompt = Some(ExportPrompt::Missing { plan, create_root });
+        }
+    }
+
+    fn launch_project_export(&mut self, plan: ExportPlan, include_missing: bool, create_root: bool) {
+        let items = plan.items(include_missing);
+        if items.is_empty() {
+            return;
+        }
+        let Some(store) = &self.store else { return };
+        let (jobs, early) = project_export::prepare(store, &plan.project, &items, now_secs());
+        self.refresh_versions();
+        let (tx, rx) = mpsc::channel();
+        let ctx = self.ctx.clone();
+        let root = PathBuf::from(&plan.project.root);
+        std::thread::Builder::new()
+            .name("sfxc-project-export".into())
+            .spawn(move || {
+                let results = project_export::write(&root, create_root, &jobs);
+                let _ = tx.send((jobs, results));
+                ctx.request_repaint();
+            })
+            .expect("spawn project export thread");
+        self.project_job = Some(ProjectJob { project_id: plan.project.id, project: plan.project.name, early, done: rx });
+    }
+
+    /// Records a finished background write on the app's own connection.
+    pub(super) fn finish_project_export(&mut self) {
+        let Some(job) = &self.project_job else { return };
+        let outcome = match job.done.try_recv() {
+            Ok(r) => Some(r),
+            Err(mpsc::TryRecvError::Empty) => return,
+            Err(mpsc::TryRecvError::Disconnected) => None,
+        };
+        let job = self.project_job.take().expect("checked above");
+        let Some((jobs, results)) = outcome else { return self.toast("The export stopped unexpectedly") };
+        let Some(store) = &self.store else { return };
+        let mut items = job.early;
+        items.extend(project_export::record(store, &jobs, results, now_secs()));
+        for i in &items {
+            let key = (job.project_id, i.sound_id);
+            match &i.error {
+                Some(e) => {
+                    self.export_errors.insert(key, e.clone());
+                }
+                None => {
+                    self.export_errors.remove(&key);
+                }
+            }
+        }
+        let (ok, msg) = export_summary(&job.project, &items);
+        if ok {
+            self.toast_ok(msg);
+        } else {
+            self.toast(msg);
+        }
+        self.after_project_change();
+        self.refresh_versions();
+    }
+
+    /// Shift-Cmd-E: the project of the open sound.
+    pub(super) fn export_current_project(&mut self) {
+        if self.current.is_none() {
+            return;
+        }
+        let ids: Vec<i64> = self.current_projects.iter().map(|(p, _)| p.id).collect();
+        match ids.as_slice() {
+            [] => self.toast("Add this sound to a project first"),
+            [id] => self.start_project_export(*id),
+            many => self.toast(format!("This sound is in {} projects; use a project's export button", many.len())),
+        }
+    }
+
     pub(super) fn project_dialogs(&mut self, ctx: &egui::Context) {
         if let Some(mut d) = self.project_dialog.take() {
             match projects::project_dialog(ctx, &mut d) {
@@ -227,5 +348,36 @@ impl SfxcApp {
                 }
             }
         }
+        if let Some(prompt) = self.export_prompt.take() {
+            match projects::export_prompt(ctx, &prompt) {
+                None => self.export_prompt = Some(prompt),
+                Some(PromptChoice::Cancel) => {}
+                Some(choice) => match prompt {
+                    ExportPrompt::CreateRoot { plan } => self.ask_missing_or_launch(plan, true),
+                    ExportPrompt::Missing { plan, create_root } => {
+                        self.launch_project_export(plan, matches!(choice, PromptChoice::All), create_root)
+                    }
+                },
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn item(name: &str, error: Option<&str>) -> ItemResult {
+        ItemResult { sound_id: 1, name: name.into(), rel_path: format!("{name}.wav"), path: PathBuf::from(format!("/g/{name}.wav")), error: error.map(Into::into) }
+    }
+
+    #[test]
+    fn export_summary_counts_and_names_the_first_failure() {
+        assert_eq!(export_summary("Game", &[item("a", None)]), (true, "Exported 1 sound to Game".to_string()));
+        assert_eq!(export_summary("Game", &[item("a", None), item("b", None)]), (true, "Exported 2 sounds to Game".to_string()));
+        let (ok, msg) = export_summary("Game", &[item("a", None), item("b", Some("disk full"))]);
+        assert!(!ok);
+        assert_eq!(msg, "Exported 1 to Game, 1 failed: b: disk full");
     }
 }

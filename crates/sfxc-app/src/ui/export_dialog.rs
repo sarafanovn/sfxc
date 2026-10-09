@@ -61,7 +61,7 @@ pub fn panel(ui: &mut Ui, d: &mut ExportDialog, natural_secs: Option<f32>) {
             let glyph = if openness > 0.5 { icon::CARET_DOWN } else { icon::CARET_RIGHT };
             ui.painter().text(resp.rect.center(), Align2::CENTER_CENTER, glyph, FontId::proportional(14.0), color);
         });
-        let title = egui::Label::new(RichText::new("Export settings").font(FontId::new(13.0, theme::semibold())).color(p.text));
+        let title = egui::Label::new(RichText::new("Quick export (⌘E)").font(FontId::new(13.0, theme::semibold())).color(p.text));
         if ui.add(title.sense(Sense::click())).on_hover_cursor(CursorIcon::PointingHand).clicked() {
             state.toggle(ui);
         }
@@ -73,6 +73,7 @@ pub fn panel(ui: &mut Ui, d: &mut ExportDialog, natural_secs: Option<f32>) {
     });
     state.show_body_unindented(ui, |ui| {
         ui.add_space(6.0);
+        ui.label(widgets::hint(ui, "Projects use their own export settings."));
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(20.0, 8.0);
             field(ui, "Format", |ui| {

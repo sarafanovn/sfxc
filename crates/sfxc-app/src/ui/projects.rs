@@ -6,6 +6,8 @@ use eframe::egui::{self, Id, RichText, Ui};
 use egui_phosphor::regular as icon;
 use sfxc_store::{relative_to_root, replace_extension, MemberFormat, MemberOptions, DEFAULT_OGG_QUALITY};
 
+use sfxc_store::project_export::ExportPlan;
+
 use super::theme::palette;
 use super::widgets::{self, button, dialog, dropdown, field, toggle, Kind};
 
@@ -240,4 +242,77 @@ fn options_editor(ui: &mut Ui, o: &mut MemberOptions, path: &mut String) {
         toggle(ui, &mut o.trim, "Trim silence");
     });
     ui.label(widgets::hint(ui, "Auto bits follow the sound's mode: 8, 16 or 24-bit."));
+}
+
+pub enum ExportPrompt {
+    CreateRoot { plan: ExportPlan },
+    Missing { plan: ExportPlan, create_root: bool },
+}
+
+pub enum PromptChoice {
+    CreateRoot,
+    All,
+    ChangedOnly,
+    Cancel,
+}
+
+pub fn export_prompt(ctx: &egui::Context, prompt: &ExportPrompt) -> Option<PromptChoice> {
+    let mut choice = None;
+    let modal = egui::Modal::new(Id::new("project_export_prompt")).show(ctx, |ui| {
+        let muted = palette(ui).muted;
+        match prompt {
+            ExportPrompt::CreateRoot { plan } => {
+                let (yes, no) = dialog(
+                    ui,
+                    "Project folder not found",
+                    |ui| {
+                        let text = format!("{} does not exist. It may be on a disk that is not connected.", plan.project.root);
+                        ui.add(egui::Label::new(RichText::new(text).color(muted)).wrap());
+                    },
+                    |ui| {
+                        let yes = button(ui, Kind::Primary, None, "Create and export").clicked();
+                        (yes, button(ui, Kind::Secondary, None, "Cancel").clicked())
+                    },
+                );
+                if yes {
+                    choice = Some(PromptChoice::CreateRoot);
+                } else if no {
+                    choice = Some(PromptChoice::Cancel);
+                }
+            }
+            ExportPrompt::Missing { plan, .. } => {
+                let n = plan.missing.len();
+                let title = if n == 1 { "1 file is missing on disk".to_string() } else { format!("{n} files are missing on disk") };
+                let (all, changed, cancel) = dialog(
+                    ui,
+                    &title,
+                    |ui| {
+                        for m in plan.missing.iter().take(5) {
+                            ui.label(RichText::new(&m.rel_path).monospace().color(muted));
+                        }
+                        if n > 5 {
+                            ui.label(widgets::hint(ui, format!("and {} more", n - 5)));
+                        }
+                        ui.label(RichText::new("Export them again?").color(muted));
+                    },
+                    |ui| {
+                        let all = button(ui, Kind::Primary, None, "Export all").clicked();
+                        let changed = !plan.changed.is_empty() && button(ui, Kind::Secondary, None, "Export changed only").clicked();
+                        (all, changed, button(ui, Kind::Secondary, None, "Cancel").clicked())
+                    },
+                );
+                if all {
+                    choice = Some(PromptChoice::All);
+                } else if changed {
+                    choice = Some(PromptChoice::ChangedOnly);
+                } else if cancel {
+                    choice = Some(PromptChoice::Cancel);
+                }
+            }
+        }
+    });
+    if choice.is_none() && modal.should_close() {
+        choice = Some(PromptChoice::Cancel);
+    }
+    choice
 }
