@@ -108,6 +108,7 @@ pub fn run(store: &Store, command: Command, ctx: &Ctx) -> Result<Value> {
             show(store, id)
         }
         Command::Export(args) => export(store, ctx, &args),
+        Command::Project(cmd) => crate::project::run(store, cmd, ctx),
         Command::Analyze { sound } => {
             let id = store.find_sound(&sound)?;
             let mut samples = render(&store.load_draft(id)?, ANALYZE_RATE);
@@ -304,7 +305,7 @@ pub(crate) fn attach_warnings(out: &mut Value, warnings: Vec<String>) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::cli::{CategoryArg, ExportArgs, FxCommand, ModeArg};
 

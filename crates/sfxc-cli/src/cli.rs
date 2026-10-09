@@ -76,6 +76,9 @@ pub enum Command {
         #[arg(long)]
         check: bool,
     },
+    /// Projects: a folder in a game and the sounds written into it. `project export` writes what changed.
+    #[command(subcommand)]
+    Project(ProjectCommand),
 }
 
 #[derive(Subcommand)]
@@ -173,8 +176,102 @@ pub struct ExportArgs {
     pub no_trim: bool,
 }
 
-#[derive(Clone, Copy, Debug, ValueEnum)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub enum FormatArg {
     Wav,
     Ogg,
+}
+
+#[derive(Subcommand)]
+pub enum ProjectCommand {
+    /// Create a project. --root is the game folder sounds go into; default: the current directory.
+    New {
+        name: String,
+        #[arg(long)]
+        root: Option<PathBuf>,
+    },
+    /// Projects with how many sounds are changed or missing on disk.
+    List,
+    /// A project's sounds with their paths and whether each is changed or missing. PROJECT is an id or a name.
+    Show { project: String },
+    Rename { project: String, name: String },
+    /// Point the project at another folder. Files are not moved; every sound is exported again next time.
+    SetRoot { project: String, dir: PathBuf },
+    /// Delete the project. Its sounds and files stay.
+    Delete { project: String },
+    /// Add a sound. --path is relative to the project folder (an absolute path inside it also works);
+    /// default: the sound's name in the folder of the sound added last.
+    Add {
+        project: String,
+        sound: String,
+        #[arg(long)]
+        path: Option<String>,
+        #[command(flatten)]
+        options: MemberArgs,
+    },
+    /// Change a sound's path or export settings. Changing the format renames the extension.
+    Set {
+        project: String,
+        sound: String,
+        #[arg(long)]
+        path: Option<String>,
+        #[command(flatten)]
+        options: MemberArgs,
+    },
+    /// Take a sound out of the project. The sound and its file stay.
+    Remove { project: String, sound: String },
+}
+
+/// Export settings of a sound in a project. Unset flags keep the current value (`add`: the default).
+#[derive(clap::Args, Default)]
+pub struct MemberArgs {
+    /// Default: from the path's extension, else WAV.
+    #[arg(long, value_enum)]
+    pub format: Option<FormatArg>,
+    /// WAV depth 8, 16, 24, or `auto` to follow the sound's mode (default).
+    #[arg(long, value_parser = parse_bits)]
+    pub bits: Option<Bits>,
+    /// OGG quality 0–10. Default: 6.
+    #[arg(long)]
+    pub quality: Option<f32>,
+    /// Sample rate. Default: 44100.
+    #[arg(long)]
+    pub rate: Option<u32>,
+    /// Exact length in seconds; cut with a fade or padded with silence.
+    #[arg(long, conflicts_with = "auto_length")]
+    pub length: Option<f32>,
+    /// Back to the sound's natural length.
+    #[arg(long)]
+    pub auto_length: bool,
+    #[arg(long, conflicts_with = "no_normalize")]
+    pub normalize: bool,
+    #[arg(long)]
+    pub no_normalize: bool,
+    #[arg(long, conflicts_with = "no_trim")]
+    pub trim: bool,
+    #[arg(long)]
+    pub no_trim: bool,
+}
+
+impl MemberArgs {
+    pub fn is_empty(&self) -> bool {
+        self.format.is_none()
+            && self.bits.is_none()
+            && self.quality.is_none()
+            && self.rate.is_none()
+            && self.length.is_none()
+            && !(self.auto_length || self.normalize || self.no_normalize || self.trim || self.no_trim)
+    }
+}
+
+/// `--bits`: `None` follows the sound's mode.
+#[derive(Clone, Copy, Debug)]
+pub struct Bits(pub Option<u16>);
+
+fn parse_bits(s: &str) -> Result<Bits, String> {
+    match s {
+        "auto" => Ok(Bits(None)),
+        "8" | "16" | "24" => Ok(Bits(Some(s.parse().expect("matched digits")))),
+        _ => Err("use 8, 16, 24 or auto".into()),
+    }
 }
