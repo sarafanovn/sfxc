@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use sfxc_core::export::ExportOptions;
 use sfxc_core::patch::SoundPatch;
 
+mod link_migration;
 mod projects;
 
 pub use projects::{
@@ -61,7 +62,8 @@ const MIGRATIONS: &[Migration] = &[
     step(r#"
     ALTER TABLE sounds ADD COLUMN export_link TEXT;
 "#),
-    step(r#"
+    Migration {
+        sql: r#"
     CREATE TABLE projects (
         id INTEGER PRIMARY KEY,
         name TEXT NOT NULL UNIQUE COLLATE NOCASE,
@@ -79,7 +81,10 @@ const MIGRATIONS: &[Migration] = &[
         UNIQUE (project_id, path_key)
     );
     CREATE INDEX project_sounds_by_sound ON project_sounds(sound_id);
-"#),
+"#,
+        post: Some(link_migration::export_links_to_project),
+        breaking: false,
+    },
 ];
 
 const NEWER_LIBRARY: &str = "this library was upgraded by a newer sfxc; update the app and sfxc-cli";
@@ -632,6 +637,7 @@ mod tests {
     }
 
     use sfxc_core::export::{ExportFormat, ExportOptions};
+    use serde_json::json;
 
     /// A library file at schema `version`, in WAL like every real library.
     fn library_at_version(path: &Path, version: usize) -> Connection {
@@ -652,6 +658,69 @@ mod tests {
         for v in 0..=MIGRATIONS.len() {
             let _ = std::fs::remove_file(format!("{}.v{v}.bak", path.display()));
         }
+    }
+
+    /// Adds a v3 sound with one version; `exported` sets `exported_at` on it.
+    fn v3_sound(conn: &Connection, name: &str, link: Option<serde_json::Value>, exported: bool) -> i64 {
+        let json = SoundPatch::default().to_json();
+        conn.execute(
+            "INSERT INTO sounds (name, created_at, updated_at, draft_json, export_link) VALUES (?1, 1, 1, ?2, ?3)",
+            params![name, json, link.map(|l| l.to_string())],
+        )
+        .unwrap();
+        let id = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO versions (sound_id, created_at, exported_at, patch_json) VALUES (?1, 1, ?2, ?3)",
+            params![id, exported.then_some(5), json],
+        )
+        .unwrap();
+        conn.execute("UPDATE sounds SET current_version_id = ?1 WHERE id = ?2", params![conn.last_insert_rowid(), id]).unwrap();
+        id
+    }
+
+    #[test]
+    fn migration_4_turns_export_links_into_the_linked_project() {
+        let path = temp_db("links");
+        {
+            let conn = library_at_version(&path, 3);
+            let wav = serde_json::to_value(ExportOptions::default()).unwrap();
+            let ogg = serde_json::to_value(ExportOptions { format: ExportFormat::Ogg { quality: 4.0 }, ..Default::default() }).unwrap();
+            v3_sound(&conn, "jump", Some(json!({ "path": "/games/a/sfx/jump.wav", "options": wav })), true);
+            v3_sound(&conn, "music", Some(json!({ "path": "/games/a/music/../music/theme.ogg", "options": ogg })), false);
+            v3_sound(&conn, "twin", Some(json!({ "path": "/games/a/SFX/jump.wav", "options": wav })), true);
+            v3_sound(&conn, "broken", Some(json!({ "nope": 1 })), false);
+            v3_sound(&conn, "plain", None, false);
+        }
+        let s = Store::open(&path).unwrap();
+        let projects = s.list_projects().unwrap();
+        assert_eq!(projects.len(), 1);
+        let p = &projects[0].project;
+        assert_eq!((p.name.as_str(), p.root.as_str()), ("Linked", "/games/a"));
+        let members = s.project_sounds(p.id, "").unwrap();
+        let got: Vec<(&str, &str, bool)> = members.iter().map(|m| (m.sound_name.as_str(), m.rel_path.as_str(), m.changed())).collect();
+        assert_eq!(got, [("music", "music/theme.ogg", true), ("jump", "sfx/jump.wav", false)]);
+        assert_eq!(members[1].options.format, MemberFormat::Wav { bits: Some(16) });
+        let twin = s.find_sound("twin").unwrap();
+        assert!(s.sound_projects(twin).unwrap().is_empty(), "the same file (ignoring case) keeps the lower id");
+        drop(s);
+        let s = Store::open(&path).unwrap();
+        assert_eq!(s.list_projects().unwrap().len(), 1, "reopening does not migrate twice");
+        drop(s);
+        cleanup(&path);
+    }
+
+    #[test]
+    fn migration_4_without_links_creates_no_project() {
+        let path = temp_db("nolinks");
+        drop({
+            let conn = library_at_version(&path, 3);
+            v3_sound(&conn, "plain", None, false);
+            conn
+        });
+        let s = Store::open(&path).unwrap();
+        assert!(s.list_projects().unwrap().is_empty());
+        drop(s);
+        cleanup(&path);
     }
 
     #[test]
