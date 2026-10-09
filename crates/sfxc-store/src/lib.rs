@@ -4,13 +4,26 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use directories::ProjectDirs;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use sfxc_core::export::ExportOptions;
 use sfxc_core::patch::SoundPatch;
 
+/// One schema step. `post` runs after `sql` in the same transaction.
+struct Migration {
+    sql: &'static str,
+    post: Option<fn(&Connection) -> Result<()>>,
+    /// Code that knows fewer migrations must refuse a library after this step.
+    breaking: bool,
+}
+
+const fn step(sql: &'static str) -> Migration {
+    Migration { sql, post: None, breaking: false }
+}
+
 /// Each entry upgrades the schema by one version. Never edit an entry after release.
-const MIGRATIONS: &[&str] = &[r#"
+const MIGRATIONS: &[Migration] = &[
+    step(r#"
     CREATE TABLE sounds (
         id INTEGER PRIMARY KEY,
         name TEXT NOT NULL,
@@ -31,14 +44,19 @@ const MIGRATIONS: &[&str] = &[r#"
         patch_json TEXT NOT NULL
     );
     CREATE INDEX versions_by_sound ON versions(sound_id, id);
-"#, r#"
+"#),
+    step(r#"
     CREATE TABLE settings (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
     );
-"#, r#"
+"#),
+    step(r#"
     ALTER TABLE sounds ADD COLUMN export_link TEXT;
-"#];
+"#),
+];
+
+const NEWER_LIBRARY: &str = "this library was upgraded by a newer sfxc; update the app and sfxc-cli";
 
 /// Where `sfxc-cli export` writes a sound and with which settings. `path` is absolute.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -75,11 +93,11 @@ impl Store {
             std::fs::create_dir_all(dir).with_context(|| format!("cannot create {}", dir.display()))?;
         }
         let conn = Connection::open(path).with_context(|| format!("cannot open {}", path.display()))?;
-        Self::init(conn)
+        Self::init(conn, Some(path))
     }
 
     pub fn open_in_memory() -> Result<Self> {
-        Self::init(Connection::open_in_memory()?)
+        Self::init(Connection::open_in_memory()?, None)
     }
 
     pub fn export_link(&self, id: i64) -> Result<Option<ExportLink>> {
@@ -136,7 +154,7 @@ impl Store {
         Ok(self.conn.query_row("SELECT draft_json FROM sounds WHERE id = ?1", [id], |r| r.get(0)).optional()?)
     }
 
-    fn init(conn: Connection) -> Result<Self> {
+    fn init(mut conn: Connection, path: Option<&Path>) -> Result<Self> {
         // Read-only probe first: a non-database file fails here before anything is written.
         let check: String = conn
             .query_row("PRAGMA quick_check", [], |r| r.get(0))
@@ -148,13 +166,32 @@ impl Store {
         // journal_mode returns a row ("wal", or "memory" for in-memory DBs), so read it.
         conn.query_row("PRAGMA journal_mode = WAL", [], |_| Ok(()))?;
         conn.execute_batch("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY)")?;
-        let applied: i64 =
-            conn.query_row("SELECT COALESCE(MAX(version), 0) FROM schema_migrations", [], |r| r.get(0))?;
-        for (i, sql) in MIGRATIONS.iter().enumerate().skip(applied as usize) {
-            let tx = conn.unchecked_transaction()?;
-            tx.execute_batch(sql)?;
-            tx.execute("INSERT INTO schema_migrations (version) VALUES (?1)", [i as i64 + 1])?;
-            tx.commit()?;
+        let required: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        if required > MIGRATIONS.len() as i64 {
+            bail!(NEWER_LIBRARY);
+        }
+        let applied = applied_version(&conn)?;
+        if applied < MIGRATIONS.len() as i64 {
+            if let Some(path) = path.filter(|_| applied > 0) {
+                backup(&conn, path, applied)?;
+            }
+            for (i, m) in MIGRATIONS.iter().enumerate() {
+                let version = i as i64 + 1;
+                // IMMEDIATE takes the write lock up front: a second process waits here, then sees the step done.
+                let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                if applied_version(&tx)? >= version {
+                    continue;
+                }
+                tx.execute_batch(m.sql)?;
+                if let Some(post) = m.post {
+                    post(&tx)?;
+                }
+                if m.breaking {
+                    tx.execute_batch(&format!("PRAGMA user_version = {version}"))?;
+                }
+                tx.execute("INSERT INTO schema_migrations (version) VALUES (?1)", [version])?;
+                tx.commit()?;
+            }
         }
         Ok(Self { conn })
     }
@@ -367,6 +404,25 @@ pub fn update_cache_path() -> PathBuf {
     library_path().with_file_name("update-check")
 }
 
+fn applied_version(conn: &Connection) -> Result<i64> {
+    Ok(conn.query_row("SELECT COALESCE(MAX(version), 0) FROM schema_migrations", [], |r| r.get(0))?)
+}
+
+/// `<library>.v{applied}.bak` before an upgrade. An existing backup is kept; another process making it at the
+/// same moment is fine.
+fn backup(conn: &Connection, library: &Path, applied: i64) -> Result<()> {
+    let target = PathBuf::from(format!("{}.v{applied}.bak", library.display()));
+    if target.exists() {
+        return Ok(());
+    }
+    let name = target.to_string_lossy().into_owned();
+    match conn.execute("VACUUM INTO ?1", [&name]) {
+        Ok(_) => Ok(()),
+        Err(_) if target.exists() => Ok(()),
+        Err(e) => Err(e).with_context(|| format!("cannot back up the library to {name}")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -551,16 +607,98 @@ mod tests {
 
     use sfxc_core::export::{ExportFormat, ExportOptions};
 
+    /// A library file at schema `version`, in WAL like every real library.
+    fn library_at_version(path: &Path, version: usize) -> Connection {
+        let conn = Connection::open(path).unwrap();
+        conn.query_row("PRAGMA journal_mode = WAL", [], |_| Ok(())).unwrap();
+        conn.execute_batch("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY)").unwrap();
+        for (i, m) in MIGRATIONS[..version].iter().enumerate() {
+            conn.execute_batch(m.sql).unwrap();
+            conn.execute("INSERT INTO schema_migrations (version) VALUES (?1)", [i as i64 + 1]).unwrap();
+        }
+        conn
+    }
+
+    fn cleanup(path: &Path) {
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+        }
+        for v in 0..=MIGRATIONS.len() {
+            let _ = std::fs::remove_file(format!("{}.v{v}.bak", path.display()));
+        }
+    }
+
+    #[test]
+    fn a_library_needing_newer_code_is_refused() {
+        let path = temp_db("newer");
+        drop(Store::open(&path).unwrap());
+        Connection::open(&path).unwrap().execute_batch("PRAGMA user_version = 999").unwrap();
+        let err = Store::open(&path).err().expect("must refuse").to_string();
+        assert!(err.contains("newer sfxc"), "{err}");
+        cleanup(&path);
+    }
+
+    #[test]
+    fn additive_steps_from_newer_code_do_not_block_opening() {
+        let path = temp_db("additive");
+        drop(Store::open(&path).unwrap());
+        Connection::open(&path).unwrap().execute("INSERT INTO schema_migrations (version) VALUES (999)", []).unwrap();
+        Store::open(&path).expect("unknown additive steps are fine");
+        cleanup(&path);
+    }
+
+    #[test]
+    fn upgrade_backs_up_first_and_keeps_an_existing_backup() {
+        let path = temp_db("backup");
+        let backup = PathBuf::from(format!("{}.v2.bak", path.display()));
+        drop(library_at_version(&path, 2));
+        drop(Store::open(&path).unwrap());
+        let old = Connection::open(&backup).unwrap();
+        let v: i64 = old.query_row("SELECT MAX(version) FROM schema_migrations", [], |r| r.get(0)).unwrap();
+        assert_eq!(v, 2, "the backup is the library before the upgrade");
+        drop(old);
+
+        cleanup(&path);
+        drop(library_at_version(&path, 2));
+        std::fs::write(&backup, b"keep").unwrap();
+        drop(Store::open(&path).unwrap());
+        assert_eq!(std::fs::read(&backup).unwrap(), b"keep");
+        cleanup(&path);
+    }
+
+    #[test]
+    fn a_new_library_is_not_backed_up() {
+        let path = temp_db("fresh");
+        drop(Store::open(&path).unwrap());
+        for v in 0..=MIGRATIONS.len() {
+            assert!(!PathBuf::from(format!("{}.v{v}.bak", path.display())).exists());
+        }
+        cleanup(&path);
+    }
+
+    #[test]
+    fn two_processes_upgrading_at_once_both_succeed() {
+        let path = temp_db("race");
+        drop(library_at_version(&path, 1));
+        let handles: Vec<_> = (0..4)
+            .map(|_| {
+                let p = path.clone();
+                std::thread::spawn(move || Store::open(&p).map(|_| ()))
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap().expect("every opener succeeds");
+        }
+        let n: i64 = Connection::open(&path).unwrap().query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, MIGRATIONS.len() as i64);
+        cleanup(&path);
+    }
+
     #[test]
     fn migration_3_upgrades_a_v2_library() {
         let path = temp_db("v2");
         {
-            let conn = Connection::open(&path).unwrap();
-            conn.execute_batch("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY)").unwrap();
-            for (i, sql) in MIGRATIONS[..2].iter().enumerate() {
-                conn.execute_batch(sql).unwrap();
-                conn.execute("INSERT INTO schema_migrations (version) VALUES (?1)", [i as i64 + 1]).unwrap();
-            }
+            let conn = library_at_version(&path, 2);
             conn.execute(
                 "INSERT INTO sounds (name, created_at, updated_at, draft_json) VALUES ('old', 1, 1, ?1)",
                 [SoundPatch::default().to_json()],
@@ -571,7 +709,7 @@ mod tests {
         let id = s.find_sound("old").unwrap();
         assert_eq!(s.export_link(id).unwrap(), None);
         drop(s);
-        let _ = std::fs::remove_file(&path);
+        cleanup(&path);
     }
 
     #[test]
