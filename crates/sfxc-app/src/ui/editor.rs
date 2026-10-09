@@ -15,6 +15,14 @@ use super::{arp, controls, effects, eq_graph, order, Action, Current};
 pub const SETTINGS: [&str; 5] = ["generate", "pitch", "envelope", "eq", "effects"];
 pub const SETTINGS_ORDER: &str = "settings_order";
 
+pub struct ProjectChip<'a> {
+    pub project_id: i64,
+    pub project: &'a str,
+    pub path: &'a str,
+    pub changed: bool,
+    pub missing: bool,
+}
+
 pub struct View<'a> {
     pub rendered: Option<(&'a [f32], u32)>,
     pub rendered_generation: u64,
@@ -22,6 +30,10 @@ pub struct View<'a> {
     pub can_undo: bool,
     pub can_redo: bool,
     pub audio_error: Option<&'a str>,
+    /// Projects the open sound is in.
+    pub projects: Vec<ProjectChip<'a>>,
+    /// Projects it could be added to.
+    pub addable: Vec<(i64, &'a str)>,
 }
 
 const MAX_CONTENT: f32 = 720.0;
@@ -104,6 +116,7 @@ fn header(ui: &mut Ui, cur: &mut Current, view: &View, export: &mut ExportDialog
         });
     });
     tag_row(ui, cur, actions);
+    project_row(ui, cur.id, view, actions);
 }
 
 pub fn parse_tags(s: &str) -> Vec<String> {
@@ -531,6 +544,41 @@ fn eq_section(ui: &mut Ui, layer: &mut Layer, grip: Grip) -> Option<(usize, usiz
             });
         });
     })
+}
+
+fn project_row(ui: &mut Ui, sound_id: i64, view: &View, actions: &mut Vec<Action>) {
+    let p = palette(ui);
+    ui.add_space(4.0);
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = Vec2::new(6.0, 6.0);
+        for chip in &view.projects {
+            let (mark, tip) = if chip.changed {
+                ("  •", "Changed since last export")
+            } else if chip.missing {
+                (icon::WARNING, "File missing on disk")
+            } else {
+                ("", "Exported")
+            };
+            let text = RichText::new(format!("{}  {} · {}{mark}", icon::FOLDER_SIMPLE, chip.project, chip.path)).size(12.0).color(p.muted);
+            let chip_button = egui::Button::new(text).fill(p.hover).corner_radius(egui::CornerRadius::same(theme::R_CONTROL));
+            if ui.add(chip_button).on_hover_text(format!("{tip}. Click to change the path or export settings.")).clicked() {
+                actions.push(Action::AskEditMembership { project_id: chip.project_id, sound_id });
+            }
+        }
+        ui.menu_button(RichText::new(format!("{}  Add to project", icon::PLUS)).size(12.0).color(p.accent_text), |ui| {
+            for (id, name) in &view.addable {
+                if ui.button(*name).clicked() {
+                    actions.push(Action::AskAddToProject { project_id: *id, sound_id });
+                }
+            }
+            if !view.addable.is_empty() {
+                ui.separator();
+            }
+            if ui.button("New project…").clicked() {
+                actions.push(Action::AskNewProject { add_sound: Some(sound_id) });
+            }
+        });
+    });
 }
 
 #[cfg(test)]

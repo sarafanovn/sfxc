@@ -8,11 +8,14 @@ mod export_dialog;
 mod library;
 mod material;
 mod order;
+mod project_actions;
+mod projects;
 mod theme;
 mod update;
 mod versions;
 mod widgets;
 
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -26,7 +29,9 @@ use sfxc_core::patch::{Mode, SoundPatch};
 use crate::audio::{self, Player};
 use crate::history::History;
 use crate::render_worker::{RenderJob, RenderResult, RenderWorker};
-use sfxc_store::{SoundSummary, Store, VersionInfo};
+use sfxc_store::{Membership, Project, SoundSummary, Store, VersionInfo};
+use project_actions::{ProjectJob, ProjectStatus};
+use projects::{ExportPrompt, MemberDialog, ProjectDialog};
 use export_dialog::ExportDialog;
 use library::Prefs;
 use update::UpdateState;
@@ -86,6 +91,9 @@ fn outside_change(db_draft: Option<&str>, saved_json: &str, local_json: &str) ->
 pub enum Action {
     NewSound,
     RefreshList,
+    AskNewProject { add_sound: Option<i64> },
+    AskAddToProject { project_id: i64, sound_id: i64 },
+    AskEditMembership { project_id: i64, sound_id: i64 },
     Open(i64),
     DuplicateSound(i64),
     AskDelete(i64),
@@ -102,12 +110,20 @@ pub enum Action {
     DuplicateVersion(i64),
     DuplicateCurrent,
     Export,
+    ExportProject(i64),
+    ExportCurrentProject,
     SetTheme(ThemeChoice),
     SetScale(f32),
     SaveVolume,
     SetAutoplay(bool),
     SaveSectionOrder(String),
     SetAccent { hue: f32, persist: bool },
+    ToggleSection(String),
+    AskRenameProject(i64),
+    AskProjectFolder(i64),
+    AskDeleteProject(i64),
+    RemoveFromProject { project_id: i64, sound_id: i64 },
+    NewSoundIn(i64),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -147,6 +163,16 @@ pub struct SfxcApp {
     player: Player,
     worker: RenderWorker,
     sounds: Vec<SoundSummary>,
+    projects: Vec<library::ProjectView>,
+    /// Sounds in no project; empty while there are no projects.
+    unassigned: Vec<SoundSummary>,
+    project_status: ProjectStatus,
+    collapsed: HashSet<String>,
+    export_errors: HashMap<(i64, i64), String>,
+    was_focused: bool,
+    current_projects: Vec<(Project, Membership)>,
+    project_dialog: Option<ProjectDialog>,
+    member_dialog: Option<MemberDialog>,
     search: String,
     current: Option<Current>,
     current_version: Option<i64>,
@@ -162,6 +188,8 @@ pub struct SfxcApp {
     confirm_delete: Option<i64>,
     toasts: Vec<Toast>,
     export_job: Option<ExportJob>,
+    project_job: Option<ProjectJob>,
+    export_prompt: Option<ExportPrompt>,
     last_auto_check: Instant,
     data_version: Option<i64>,
     last_sync: Instant,
@@ -182,6 +210,15 @@ impl SfxcApp {
             player: Player::new(),
             worker,
             sounds: Vec::new(),
+            projects: Vec::new(),
+            unassigned: Vec::new(),
+            project_status: ProjectStatus::default(),
+            collapsed: HashSet::new(),
+            export_errors: HashMap::new(),
+            was_focused: true,
+            current_projects: Vec::new(),
+            project_dialog: None,
+            member_dialog: None,
             search: String::new(),
             current: None,
             current_version: None,
@@ -197,6 +234,8 @@ impl SfxcApp {
             confirm_delete: None,
             toasts: Vec::new(),
             export_job: None,
+            project_job: None,
+            export_prompt: None,
             last_auto_check: Instant::now(),
             data_version: None,
             last_sync: Instant::now(),
@@ -230,6 +269,9 @@ impl SfxcApp {
         if let Some(h) = store.setting("accent_hue").ok().flatten().and_then(|s| accent::parse_hue(&s)) {
             self.prefs.accent_hue = h;
         }
+        if let Some(c) = store.setting("library_collapsed").ok().flatten() {
+            self.collapsed = c.split(',').filter(|k| !k.is_empty()).map(String::from).collect();
+        }
         if let Some(saved) = store.setting("section_order").ok().flatten() {
             // The old "filter" card became the equalizer; keep its place in a saved order.
             let order = order::restore(&saved.replace("filter", "eq"), &editor::SETTINGS);
@@ -244,6 +286,13 @@ impl SfxcApp {
         self.check(r);
     }
 
+    fn save_collapsed(&mut self) {
+        let mut keys: Vec<&str> = self.collapsed.iter().map(String::as_str).collect();
+        keys.sort_unstable();
+        let value = keys.join(",");
+        self.save_pref("library_collapsed", &value);
+    }
+
     fn open_store(&mut self) {
         match Store::open(&self.db_path) {
             Ok(store) => {
@@ -251,6 +300,7 @@ impl SfxcApp {
                 self.store_error = None;
                 self.load_prefs();
                 self.refresh_list();
+                self.refresh_project_status();
                 if let Some(first) = self.sounds.first().map(|s| s.id) {
                     self.open_sound(first);
                 }
@@ -298,10 +348,20 @@ impl SfxcApp {
 
     fn refresh_list(&mut self) {
         let Some(store) = &self.store else { return };
-        let r = store.list_sounds(&self.search);
-        if let Some(list) = self.check(r) {
-            self.sounds = list;
+        let search = self.search.clone();
+        let r = (|| -> Result<_> {
+            let sounds = store.list_sounds(&search)?;
+            let projects = project_actions::load_projects(store, &search)?;
+            let unassigned = if projects.is_empty() { Vec::new() } else { store.unassigned_sounds(&search)? };
+            Ok((sounds, projects, unassigned))
+        })();
+        if let Some((sounds, projects, unassigned)) = self.check(r) {
+            self.sounds = sounds;
+            self.projects = projects;
+            self.unassigned = unassigned;
         }
+        // Cheap (no disk access) and keeps the editor's ● in step with the autosaved draft.
+        self.refresh_current_projects();
     }
 
     fn refresh_versions(&mut self) {
@@ -329,12 +389,13 @@ impl SfxcApp {
             self.edit_base = None;
             self.mode_note = None;
             self.refresh_versions();
+            self.refresh_current_projects();
             self.request_render();
         }
     }
 
-    fn new_sound(&mut self) {
-        let Some(store) = &self.store else { return };
+    fn new_sound(&mut self) -> Option<i64> {
+        let store = self.store.as_ref()?;
         let name = format!("sound {}", self.sounds.len() + 1);
         let patch = generators::generate(Category::BlipSelect, Mode::Modern, fresh_seed());
         let r = store.create_sound(&name, &patch, now_secs());
@@ -342,6 +403,9 @@ impl SfxcApp {
             self.search.clear();
             self.refresh_list();
             self.open_sound(id);
+            Some(id)
+        } else {
+            None
         }
     }
 
@@ -442,6 +506,7 @@ impl SfxcApp {
                 self.rendered = None;
             }
             self.refresh_list();
+            self.refresh_project_status();
         }
     }
 
@@ -462,7 +527,7 @@ impl SfxcApp {
     }
 
     fn run_export(&mut self) {
-        if self.export_job.is_some() {
+        if self.export_busy() {
             return self.toast("An export is already running");
         }
         let (Some(store), Some(cur)) = (&self.store, &self.current) else { return };
@@ -610,8 +675,29 @@ impl SfxcApp {
 
     fn apply(&mut self, action: Action) {
         match action {
-            Action::NewSound => self.new_sound(),
+            Action::NewSound => {
+                self.new_sound();
+            }
             Action::RefreshList => self.refresh_list(),
+            Action::ToggleSection(key) => {
+                if !self.collapsed.remove(&key) {
+                    self.collapsed.insert(key);
+                }
+                self.save_collapsed();
+            }
+            Action::AskRenameProject(id) => self.ask_rename_project(id),
+            Action::AskProjectFolder(id) => self.ask_project_folder(id),
+            Action::AskDeleteProject(id) => self.ask_delete_project(id),
+            Action::RemoveFromProject { project_id, sound_id } => self.remove_from_project(project_id, sound_id),
+            Action::NewSoundIn(id) => {
+                if self.collapsed.remove(&library::Section::Project(id).key()) {
+                    self.save_collapsed();
+                }
+                self.new_sound_in(id);
+            }
+            Action::AskNewProject { add_sound } => self.ask_new_project(add_sound),
+            Action::AskAddToProject { project_id, sound_id } => self.ask_add_to_project(project_id, sound_id),
+            Action::AskEditMembership { project_id, sound_id } => self.ask_edit_membership(project_id, sound_id),
             Action::Open(id) => self.open_sound(id),
             Action::DuplicateSound(id) => self.duplicate_sound(id),
             Action::AskDelete(id) => self.confirm_delete = Some(id),
@@ -634,6 +720,8 @@ impl SfxcApp {
             Action::Restore(v) => self.restore(v),
             Action::DuplicateVersion(v) => self.duplicate_version(v),
             Action::DuplicateCurrent => self.duplicate_current(),
+            Action::ExportProject(id) => self.start_project_export(id),
+            Action::ExportCurrentProject => self.export_current_project(),
             Action::Export => {
                 if self.current.is_some() {
                     self.run_export();
@@ -671,6 +759,7 @@ impl SfxcApp {
     fn poll(&mut self, ctx: &egui::Context) {
         self.player.maintain();
         self.finish_export();
+        self.finish_project_export();
         if !self.player.is_available() {
             ctx.request_repaint_after(Duration::from_secs(3));
         }
@@ -698,6 +787,9 @@ impl SfxcApp {
             }
             if i.consume_key(Modifiers::COMMAND, Key::S) {
                 actions.push(Action::AskVersionNote);
+            }
+            if i.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, Key::E) {
+                actions.push(Action::ExportCurrentProject);
             }
             if i.consume_key(Modifiers::COMMAND, Key::E) {
                 actions.push(Action::Export);
@@ -773,6 +865,7 @@ impl SfxcApp {
             return;
         }
         self.refresh_list();
+        self.refresh_project_status();
         let Some((id, saved, local)) = self.current.as_ref().map(|c| (c.id, c.saved_json.clone(), c.patch.to_json())) else { return };
         let Some(store) = &self.store else { return };
         let r = store.draft_json_if_exists(id);
@@ -812,6 +905,11 @@ impl SfxcApp {
             self.maybe_auto_version();
         }
         ctx.request_repaint_after(AUTO_VERSION_CHECK);
+        let focused = ctx.input(|i| i.viewport().focused.unwrap_or(true));
+        if focused && !self.was_focused {
+            self.refresh_project_status();
+        }
+        self.was_focused = focused;
         if ctx.input(|i| i.viewport().close_requested()) {
             self.flush_draft();
         }
@@ -927,7 +1025,16 @@ impl eframe::App for SfxcApp {
 
         egui::Panel::left("library").resizable(false).exact_size(268.0).show_separator_line(false).frame(side(18)).show(ui, |ui| {
             let current = self.current.as_ref().map(|c| c.id);
-            library::show(ui, &self.sounds, &mut self.search, current, now, &mut self.prefs, &mut actions);
+            let view = library::LibraryView {
+                sounds: &self.sounds,
+                unassigned: &self.unassigned,
+                projects: &self.projects,
+                status: &self.project_status,
+                export_errors: &self.export_errors,
+                exporting: self.project_job.as_ref().map(|j| j.project_id),
+                collapsed: &self.collapsed,
+            };
+            library::show(ui, &view, &mut self.search, current, now, &mut self.prefs, &mut actions);
         });
         egui::Panel::right("versions")
             .resizable(false)
@@ -943,6 +1050,24 @@ impl eframe::App for SfxcApp {
         }
         let mut before = None;
         let mut rate_changed = false;
+        let chips: Vec<editor::ProjectChip> = self
+            .current_projects
+            .iter()
+            .map(|(p, m)| editor::ProjectChip {
+                project_id: p.id,
+                project: &p.name,
+                path: &m.rel_path,
+                changed: m.changed(),
+                missing: self.project_status.missing.get(&(p.id, m.sound_id)).copied().unwrap_or(false),
+            })
+            .collect();
+        let addable: Vec<(i64, &str)> = self
+            .projects
+            .iter()
+            .map(|v| &v.summary.project)
+            .filter(|p| !self.current_projects.iter().any(|(q, _)| q.id == p.id))
+            .map(|p| (p.id, p.name.as_str()))
+            .collect();
         egui::CentralPanel::default().frame(egui::Frame::new().fill(p.canvas)).show(ui, |ui| match self.current.as_mut() {
             Some(cur) => {
                 let snapshot = cur.patch.clone();
@@ -954,6 +1079,8 @@ impl eframe::App for SfxcApp {
                     can_undo: self.history.can_undo(),
                     can_redo: self.history.can_redo(),
                     audio_error: self.player.error(),
+                    projects: chips,
+                    addable,
                 };
                 editor::show(ui, cur, &view, &mut self.export_settings, &mut self.mode_note, &mut actions);
                 if cur.patch != snapshot {
@@ -989,6 +1116,7 @@ impl eframe::App for SfxcApp {
             }
         }
         self.dialogs(&ctx);
+        self.project_dialogs(&ctx);
         for a in actions {
             self.apply(a);
         }
@@ -1019,6 +1147,19 @@ mod tests {
             saved_json: String::new(),
             changed_at: None,
         }
+    }
+
+    #[test]
+    fn a_new_project_with_a_sound_shows_up_in_the_lists() {
+        let s = Store::open_in_memory().unwrap();
+        let id = s.create_sound("laser", &SoundPatch::default(), 1).unwrap();
+        let pid = s.create_project("Game", "/tmp/game", 1).unwrap();
+        let options = sfxc_store::MemberOptions::default();
+        let path = s.default_member_path(pid, "laser", &options).unwrap();
+        s.add_to_project(pid, id, &path, &options).unwrap();
+        let views = project_actions::load_projects(&s, "").unwrap();
+        assert_eq!(views[0].members[0].rel_path, "laser.wav");
+        assert!(s.unassigned_sounds("").unwrap().is_empty());
     }
 
     #[test]
@@ -1087,6 +1228,8 @@ mod render_smoke {
                     can_undo: false,
                     can_redo: false,
                     audio_error: None,
+                    projects: Vec::new(),
+                    addable: Vec::new(),
                 };
                 editor::show(ui, cur, &view, &mut ExportDialog::default(), &mut note, actions);
             });
@@ -1282,6 +1425,8 @@ mod render_smoke {
                             can_undo: false,
                             can_redo: false,
                             audio_error: None,
+                            projects: Vec::new(),
+                            addable: Vec::new(),
                         };
                         editor::show(ui, &mut cur, &view, &mut ExportDialog::default(), &mut note, &mut Vec::new());
                     });
