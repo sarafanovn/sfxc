@@ -91,7 +91,7 @@ The library lives in `~/Library/Application Support/sfxc/library.db`. Set `SFXC_
 
 **Versions.** The draft autosaves continuously and is not a version. A version is created on `⌘S`, on export, and after 5 minutes of unsaved changes. Any version can be restored or duplicated as a new sound; restoring saves the current state first, so nothing is lost. Undo is per session and independent of versions.
 
-**Projects.** A sound can be in several projects, with a different path and format in each. Sounds in no project are listed under *No project*. A dot marks a sound changed since the last project export, a warning sign a file missing on disk. sfxc never deletes files: after a rename or a new folder the old file stays.
+**Projects.** A sound can be in several projects, with a different path and format in each. Sounds in no project are listed under *No project*. A dot marks a sound changed since the last project export, a warning sign a file missing on disk. sfxc never deletes files: after a path change or a new folder the old file stays.
 
 WAV bit depth follows the mode (8, 16 or 24-bit).
 

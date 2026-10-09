@@ -253,6 +253,11 @@ impl SfxcApp {
         if self.export_busy() {
             return self.toast("An export is already running");
         }
+        // The prompt may have been open for a while: export what is changed now, with the choice made there.
+        self.flush_draft();
+        let Some(store) = &self.store else { return };
+        let r = project_export::plan(store, plan.project.id);
+        let Some(plan) = self.check(r) else { return };
         let items = plan.items(include_missing);
         if items.is_empty() {
             return;

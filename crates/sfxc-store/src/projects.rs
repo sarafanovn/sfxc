@@ -274,7 +274,9 @@ impl Store {
     /// Files are not moved, so every sound in the project needs exporting again.
     pub fn set_project_root(&self, id: i64, root: &str) -> Result<()> {
         let root = normalize_root(root)?;
-        self.project(id)?;
+        if self.project(id)?.root == root {
+            return Ok(());
+        }
         let tx = self.conn.unchecked_transaction()?;
         tx.execute("UPDATE projects SET root = ?1 WHERE id = ?2", params![root, id])?;
         tx.execute("UPDATE project_sounds SET exported_version_id = NULL WHERE project_id = ?1", [id])?;
@@ -591,6 +593,20 @@ mod tests {
         assert!(!changed(), "a no-op keeps the export");
         s.set_project_root(pid, "/games/b").unwrap();
         assert!(changed());
+    }
+
+    #[test]
+    fn setting_the_same_root_keeps_the_exports() {
+        let (s, pid, sid) = setup();
+        s.add_to_project(pid, sid, "click.wav", &wav()).unwrap();
+        let v = s.current_version_id(sid).unwrap().unwrap();
+        let m = s.membership(pid, sid).unwrap();
+        s.mark_project_exported(pid, sid, v, &m.rel_path, &m.options, 5).unwrap();
+        let root = s.project(pid).unwrap().root;
+        s.set_project_root(pid, &root).unwrap();
+        assert!(!s.membership(pid, sid).unwrap().changed());
+        s.set_project_root(pid, &format!("{root}/")).unwrap();
+        assert!(!s.membership(pid, sid).unwrap().changed(), "a trailing slash is the same folder");
     }
 
     #[test]

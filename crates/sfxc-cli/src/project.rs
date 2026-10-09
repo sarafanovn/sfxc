@@ -235,7 +235,7 @@ fn export_project(store: &Store, ctx: &Ctx, project_id: i64, args: &ProjectExpor
                 v
             })
             .collect();
-        return Ok(json!({ "project_id": p.id, "project": p.name, "root": p.root, "dry_run": true, "would_export": would, "skipped_missing": skipped, "exported": 0, "failed": 0 }));
+        return Ok(json!({ "project_id": p.id, "project": p.name, "root": p.root, "root_exists": plan.root_exists, "dry_run": true, "would_export": would, "skipped_missing": skipped, "exported": 0, "failed": 0 }));
     }
     let results = project_export::run(store, p, &items, args.create_root, ctx.now);
     let failed = results.iter().filter(|r| r.error.is_some()).count();
@@ -462,6 +462,7 @@ mod tests {
         let dry = ProjectExportArgs { dry_run: true, include_missing: true, ..export_args(Some("Game")) };
         let out = run(&s, P::Export(dry), &dir).unwrap();
         assert_eq!(out["would_export"].as_array().unwrap().len(), 2);
+        assert_eq!(out["root_exists"], json!(true));
         assert!(!dir.join("sfx/coin.wav").exists());
         assert_eq!(s.list_versions(jump).unwrap().len(), versions, "a dry run commits nothing");
 
@@ -479,6 +480,8 @@ mod tests {
         let e = run(&s, P::Export(export_args(Some("Game"))), &dir).unwrap_err().to_string();
         assert!(e.contains("--create-root"), "{e}");
         assert!(!dir.join("game").exists());
+        let dry = ProjectExportArgs { dry_run: true, ..export_args(Some("Game")) };
+        assert_eq!(run(&s, P::Export(dry), &dir).unwrap()["root_exists"], json!(false));
 
         run(&s, P::New { name: "Other".into(), root: Some("other".into()) }, &dir).unwrap();
         new_jump(&s, &ctx(&dir), "coin");

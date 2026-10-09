@@ -224,7 +224,6 @@ fn new_row(ui: &mut egui::Ui, actions: &mut Vec<Action>) {
     }
 }
 
-
 /// Draws a section title; returns whether its rows are shown. Collapsed sections open while searching.
 fn section_header(
     ui: &mut egui::Ui,
@@ -244,7 +243,11 @@ fn section_header(
     let caret = if open { icon::CARET_DOWN } else { icon::CARET_RIGHT };
     painter.text(Pos2::new(rect.left() + 6.0, cy), Align2::LEFT_CENTER, caret, FontId::proportional(13.0), p.muted);
     let x = rect.left() + 24.0;
-    let title_galley = painter.layout_no_wrap(title.to_string(), FontId::new(12.5, theme::semibold()), p.text);
+    // A project header keeps room for its export and `+` buttons.
+    let title_max = rect.width() - 24.0 - if project.is_some() { 80.0 + 40.0 } else { 8.0 };
+    let mut title_job = egui::text::LayoutJob::simple_singleline(title.to_string(), FontId::new(12.5, theme::semibold()), p.text);
+    title_job.wrap = egui::text::TextWrapping::truncate_at_width(title_max.max(10.0));
+    let title_galley = painter.layout_job(title_job);
     let title_w = title_galley.size().x;
     painter.galley(Pos2::new(x, cy - title_galley.size().y / 2.0), title_galley, p.text);
     let (count, color) = match project {
@@ -413,6 +416,7 @@ fn sound_menu(ui: &mut egui::Ui, d: &RowData, section: Section, view: &LibraryVi
         actions.push(Action::AskDelete(d.id));
     }
 }
+
 fn one_line(ui: &egui::Ui, text: &str, size: f32, color: egui::Color32, width: f32) -> std::sync::Arc<egui::Galley> {
     let mut job = egui::text::LayoutJob::simple_singleline(text.to_string(), FontId::proportional(size), color);
     job.wrap = egui::text::TextWrapping::truncate_at_width(width.max(10.0));

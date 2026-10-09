@@ -422,12 +422,25 @@ fn backup(conn: &Connection, library: &Path, applied: i64) -> Result<()> {
     if target.exists() {
         return Ok(());
     }
-    let name = target.to_string_lossy().into_owned();
-    match conn.execute("VACUUM INTO ?1", [&name]) {
-        Ok(_) => Ok(()),
-        Err(_) if target.exists() => Ok(()),
-        Err(e) => Err(e).with_context(|| format!("cannot back up the library to {name}")),
+    // A failed VACUUM may leave a partial file, so it goes to a temporary name (unique per call, so concurrent upgrades do not share it) and is renamed once complete.
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = PathBuf::from(format!("{}.{}-{seq}.tmp", target.display(), std::process::id()));
+    let _ = std::fs::remove_file(&tmp);
+    let name = tmp.to_string_lossy().into_owned();
+    if let Err(e) = conn.execute("VACUUM INTO ?1", [&name]) {
+        let _ = std::fs::remove_file(&tmp);
+        if target.exists() {
+            return Ok(());
+        }
+        return Err(e).with_context(|| format!("cannot back up the library to {}", target.display()));
     }
+    // Another process may have finished first: its backup stays.
+    if target.exists() {
+        let _ = std::fs::remove_file(&tmp);
+        return Ok(());
+    }
+    std::fs::rename(&tmp, &target).with_context(|| format!("cannot back up the library to {}", target.display()))
 }
 
 #[cfg(test)]
@@ -734,6 +747,35 @@ mod tests {
         std::fs::write(&backup, b"keep").unwrap();
         drop(Store::open(&path).unwrap());
         assert_eq!(std::fs::read(&backup).unwrap(), b"keep");
+        cleanup(&path);
+    }
+
+    #[test]
+    fn a_stale_backup_tmp_does_not_block_and_an_existing_backup_is_kept() {
+        let path = temp_db("backuptmp");
+        let backup = PathBuf::from(format!("{}.v2.bak", path.display()));
+        let tmp = PathBuf::from(format!("{}.tmp", backup.display()));
+        drop(library_at_version(&path, 2));
+        std::fs::write(&tmp, b"partial").unwrap();
+        drop(Store::open(&path).unwrap());
+        let old = Connection::open(&backup).unwrap();
+        let v: i64 = old.query_row("SELECT MAX(version) FROM schema_migrations", [], |r| r.get(0)).unwrap();
+        assert_eq!(v, 2);
+        drop(old);
+
+        let conn = Connection::open(&path).unwrap();
+        std::fs::write(&backup, b"keep").unwrap();
+        super::backup(&conn, &path, 2).unwrap();
+        assert_eq!(std::fs::read(&backup).unwrap(), b"keep");
+        let leftovers = std::fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().starts_with(&format!("{}.v2.bak.", path.file_name().unwrap().to_string_lossy())))
+            .count();
+        assert_eq!(leftovers, 1, "only the stale file is left; this run cleaned up its own");
+        drop(conn);
+        let _ = std::fs::remove_file(&tmp);
+        let _ = std::fs::remove_file(&backup);
         cleanup(&path);
     }
 

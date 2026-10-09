@@ -286,6 +286,13 @@ impl SfxcApp {
         self.check(r);
     }
 
+    fn save_collapsed(&mut self) {
+        let mut keys: Vec<&str> = self.collapsed.iter().map(String::as_str).collect();
+        keys.sort_unstable();
+        let value = keys.join(",");
+        self.save_pref("library_collapsed", &value);
+    }
+
     fn open_store(&mut self) {
         match Store::open(&self.db_path) {
             Ok(store) => {
@@ -676,17 +683,16 @@ impl SfxcApp {
                 if !self.collapsed.remove(&key) {
                     self.collapsed.insert(key);
                 }
-                let mut keys: Vec<&str> = self.collapsed.iter().map(String::as_str).collect();
-                keys.sort_unstable();
-                let value = keys.join(",");
-                self.save_pref("library_collapsed", &value);
+                self.save_collapsed();
             }
             Action::AskRenameProject(id) => self.ask_rename_project(id),
             Action::AskProjectFolder(id) => self.ask_project_folder(id),
             Action::AskDeleteProject(id) => self.ask_delete_project(id),
             Action::RemoveFromProject { project_id, sound_id } => self.remove_from_project(project_id, sound_id),
             Action::NewSoundIn(id) => {
-                self.collapsed.remove(&library::Section::Project(id).key());
+                if self.collapsed.remove(&library::Section::Project(id).key()) {
+                    self.save_collapsed();
+                }
                 self.new_sound_in(id);
             }
             Action::AskNewProject { add_sound } => self.ask_new_project(add_sound),

@@ -406,7 +406,6 @@ pub(crate) mod tests {
         assert!(s.sound_projects(id).unwrap().is_empty(), "a one-off export remembers nothing");
     }
 
-    /// Review focus 4: old agent instructions get a pointer to projects.
     fn set_cmd(sound: &str, a: &[&str]) -> Command {
         Command::Set { sound: sound.into(), assignments: a.iter().map(|s| s.to_string()).collect() }
     }
