@@ -9,6 +9,13 @@ use serde::{Deserialize, Serialize};
 use sfxc_core::export::ExportOptions;
 use sfxc_core::patch::SoundPatch;
 
+mod projects;
+
+pub use projects::{
+    normalize_rel_path, relative_to_root, replace_extension, MemberFormat, MemberOptions, Membership, Project, ProjectSummary,
+    DEFAULT_OGG_QUALITY, RATE_RANGE,
+};
+
 /// One schema step. `post` runs after `sql` in the same transaction.
 struct Migration {
     sql: &'static str,
@@ -53,6 +60,25 @@ const MIGRATIONS: &[Migration] = &[
 "#),
     step(r#"
     ALTER TABLE sounds ADD COLUMN export_link TEXT;
+"#),
+    step(r#"
+    CREATE TABLE projects (
+        id INTEGER PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+        root TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+    );
+    CREATE TABLE project_sounds (
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        sound_id INTEGER NOT NULL REFERENCES sounds(id) ON DELETE CASCADE,
+        rel_path TEXT NOT NULL,
+        path_key TEXT NOT NULL,
+        options_json TEXT NOT NULL,
+        exported_version_id INTEGER,
+        PRIMARY KEY (project_id, sound_id),
+        UNIQUE (project_id, path_key)
+    );
+    CREATE INDEX project_sounds_by_sound ON project_sounds(sound_id);
 "#),
 ];
 
