@@ -6,7 +6,7 @@ use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
 use sfxc_store::{project_export, relative_to_root, replace_extension, MemberFormat, MemberOptions, Membership, Project, Store, DEFAULT_OGG_QUALITY};
 
-use crate::cli::{Bits, FormatArg, MemberArgs, ProjectCommand};
+use crate::cli::{Bits, FormatArg, MemberArgs, ProjectCommand, ProjectExportArgs};
 use crate::commands::Ctx;
 
 pub fn run(store: &Store, command: ProjectCommand, ctx: &Ctx) -> Result<Value> {
@@ -68,6 +68,7 @@ pub fn run(store: &Store, command: ProjectCommand, ctx: &Ctx) -> Result<Value> {
             store.remove_from_project(pid, sid)?;
             Ok(json!({ "project_id": pid, "id": sid, "removed": true }))
         }
+        ProjectCommand::Export(args) => export(store, ctx, &args),
     }
 }
 
@@ -194,6 +195,71 @@ pub(crate) fn project_json(store: &Store, project_id: i64) -> Result<Value> {
     }))
 }
 
+fn export(store: &Store, ctx: &Ctx, args: &ProjectExportArgs) -> Result<Value> {
+    if !args.all {
+        let id = store.find_project(args.project.as_deref().context("name a project or pass --all")?)?;
+        return export_project(store, ctx, id, args);
+    }
+    let (mut projects, mut exported, mut failed) = (Vec::new(), 0, 0);
+    for s in store.list_projects()? {
+        match export_project(store, ctx, s.project.id, args) {
+            Ok(v) => {
+                exported += v["exported"].as_u64().unwrap_or(0);
+                failed += v["failed"].as_u64().unwrap_or(0);
+                projects.push(v);
+            }
+            Err(e) => {
+                failed += 1;
+                projects.push(json!({ "project_id": s.project.id, "project": s.project.name, "error": format!("{e:#}") }));
+            }
+        }
+    }
+    Ok(json!({ "projects": projects, "exported": exported, "failed": failed }))
+}
+
+fn export_project(store: &Store, ctx: &Ctx, project_id: i64, args: &ProjectExportArgs) -> Result<Value> {
+    let plan = project_export::plan(store, project_id)?;
+    let p = &plan.project;
+    if !plan.root_exists && !args.create_root && !args.dry_run {
+        bail!("project folder {} does not exist (a disk that is not connected?); pass --create-root to create it", p.root);
+    }
+    let brief = |m: &Membership| json!({ "id": m.sound_id, "name": m.sound_name, "path": m.rel_path });
+    let skipped: Vec<Value> = if args.include_missing { Vec::new() } else { plan.missing.iter().map(brief).collect() };
+    let items = plan.items(args.include_missing);
+    if args.dry_run {
+        let would: Vec<Value> = items
+            .iter()
+            .map(|m| {
+                let mut v = brief(m);
+                v["reason"] = json!(if m.changed() { "changed" } else { "missing" });
+                v
+            })
+            .collect();
+        return Ok(json!({ "project_id": p.id, "project": p.name, "root": p.root, "dry_run": true, "would_export": would, "skipped_missing": skipped, "exported": 0, "failed": 0 }));
+    }
+    let results = project_export::run(store, p, &items, args.create_root, ctx.now);
+    let failed = results.iter().filter(|r| r.error.is_some()).count();
+    let results: Vec<Value> = results
+        .iter()
+        .map(|r| {
+            let mut v = json!({ "id": r.sound_id, "name": r.name, "path": r.rel_path, "abs_path": r.path, "ok": r.error.is_none() });
+            if let Some(e) = &r.error {
+                v["error"] = json!(e);
+            }
+            v
+        })
+        .collect();
+    Ok(json!({
+        "project_id": p.id,
+        "project": p.name,
+        "root": p.root,
+        "exported": results.len() - failed,
+        "failed": failed,
+        "skipped_missing": skipped,
+        "results": results,
+    }))
+}
+
 fn list(store: &Store) -> Result<Value> {
     let mut out = Vec::new();
     for s in store.list_projects()? {
@@ -213,7 +279,7 @@ fn list(store: &Store) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli::{Bits, Command, FormatArg, ProjectCommand as P};
+    use crate::cli::{Bits, CategoryArg, Command, FormatArg, ModeArg, ProjectCommand as P, ProjectExportArgs};
     use crate::commands::{self, tests::{ctx, new_jump, temp_dir}};
 
     fn run(s: &Store, c: P, cwd: &Path) -> Result<Value> {
@@ -331,5 +397,115 @@ mod tests {
         let out = run(&s, P::Delete { project: "Game 2".into() }, &dir).unwrap();
         assert_eq!(out["removed_memberships"], json!(0));
         assert!(s.find_sound("jump").is_ok());
+    }
+
+    fn export_args(project: Option<&str>) -> ProjectExportArgs {
+        ProjectExportArgs { project: project.map(Into::into), all: project.is_none(), include_missing: false, create_root: false, dry_run: false }
+    }
+
+    fn new_in_game(s: &Store, dir: &Path, name: &str, path: &str) -> i64 {
+        let cmd = Command::New {
+            name: name.into(),
+            category: Some(CategoryArg::Jump),
+            mode: ModeArg::Modern,
+            seed: Some(1),
+            patch: None,
+            project: Some("Game".into()),
+            path: Some(path.into()),
+        };
+        commands::run(s, cmd, &ctx(dir)).unwrap()["id"].as_i64().unwrap()
+    }
+
+    #[test]
+    fn agent_cycle_new_add_export_set_export() {
+        let dir = temp_dir("pcycle");
+        let s = Store::open_in_memory().unwrap();
+        let c = ctx(&dir);
+        game(&s, &dir, None);
+        new_in_game(&s, &dir, "jump", "sfx/jump.wav");
+        new_jump(&s, &c, "coin");
+        run(&s, add("Game", "coin", Some("sfx/coin.wav"), MemberArgs::default()), &dir).unwrap();
+        let out = run(&s, P::Export(export_args(Some("Game"))), &dir).unwrap();
+        assert_eq!((out["exported"].clone(), out["failed"].clone()), (json!(2), json!(0)));
+        assert!(dir.join("sfx/jump.wav").is_file());
+
+        commands::run(&s, Command::Set { sound: "jump".into(), assignments: vec!["master_volume=0.5".into()] }, &c).unwrap();
+        let out = run(&s, P::Export(export_args(Some("Game"))), &dir).unwrap();
+        assert_eq!(out["exported"], json!(1));
+        assert_eq!(out["results"][0]["name"], json!("jump"));
+
+        let set = P::Set { project: "Game".into(), sound: "coin".into(), path: Some("ui/coin.wav".into()), options: MemberArgs::default() };
+        assert_eq!(run(&s, set, &dir).unwrap()["previous_path"], json!("sfx/coin.wav"));
+        let out = run(&s, P::Export(export_args(Some("Game"))), &dir).unwrap();
+        assert_eq!(out["results"][0]["path"], json!("ui/coin.wav"));
+        assert!(dir.join("sfx/coin.wav").is_file(), "the old file stays");
+    }
+
+    #[test]
+    fn missing_files_need_include_missing_and_dry_run_changes_nothing() {
+        let dir = temp_dir("pmissing");
+        let s = Store::open_in_memory().unwrap();
+        game(&s, &dir, None);
+        let jump = new_in_game(&s, &dir, "jump", "sfx/jump.wav");
+        new_in_game(&s, &dir, "coin", "sfx/coin.wav");
+        run(&s, P::Export(export_args(Some("Game"))), &dir).unwrap();
+        std::fs::remove_file(dir.join("sfx/coin.wav")).unwrap();
+
+        let out = run(&s, P::Export(export_args(Some("Game"))), &dir).unwrap();
+        assert_eq!(out["exported"], json!(0));
+        assert_eq!(out["skipped_missing"][0]["name"], json!("coin"));
+
+        let mut patch = s.load_draft(jump).unwrap();
+        patch.master_volume = 0.4;
+        s.save_draft(jump, &patch, 200).unwrap();
+        let versions = s.list_versions(jump).unwrap().len();
+        let dry = ProjectExportArgs { dry_run: true, include_missing: true, ..export_args(Some("Game")) };
+        let out = run(&s, P::Export(dry), &dir).unwrap();
+        assert_eq!(out["would_export"].as_array().unwrap().len(), 2);
+        assert!(!dir.join("sfx/coin.wav").exists());
+        assert_eq!(s.list_versions(jump).unwrap().len(), versions, "a dry run commits nothing");
+
+        let out = run(&s, P::Export(ProjectExportArgs { include_missing: true, ..export_args(Some("Game")) }), &dir).unwrap();
+        assert_eq!(out["exported"], json!(2));
+    }
+
+    /// Review focus 1: a folder that is not there is never created silently.
+    #[test]
+    fn a_missing_root_needs_create_root_and_all_reports_per_project() {
+        let dir = temp_dir("proot");
+        let s = Store::open_in_memory().unwrap();
+        game(&s, &dir, Some("game"));
+        new_in_game(&s, &dir, "jump", "jump.wav");
+        let e = run(&s, P::Export(export_args(Some("Game"))), &dir).unwrap_err().to_string();
+        assert!(e.contains("--create-root"), "{e}");
+        assert!(!dir.join("game").exists());
+
+        run(&s, P::New { name: "Other".into(), root: Some("other".into()) }, &dir).unwrap();
+        new_jump(&s, &ctx(&dir), "coin");
+        run(&s, add("Other", "coin", None, MemberArgs::default()), &dir).unwrap();
+        let out = run(&s, P::Export(export_args(None)), &dir).unwrap();
+        assert_eq!(out["failed"], json!(2));
+        let out = run(&s, P::Export(ProjectExportArgs { create_root: true, ..export_args(None) }), &dir).unwrap();
+        assert_eq!((out["exported"].clone(), out["failed"].clone()), (json!(2), json!(0)));
+    }
+
+    #[test]
+    fn list_filters_by_project_and_shows_memberships() {
+        let dir = temp_dir("plist");
+        let s = Store::open_in_memory().unwrap();
+        let c = ctx(&dir);
+        game(&s, &dir, None);
+        new_in_game(&s, &dir, "jump", "sfx/jump.wav");
+        new_jump(&s, &c, "coin");
+        let list = |project: Option<&str>, unassigned: bool| {
+            let out = commands::run(&s, Command::List { search: String::new(), project: project.map(Into::into), unassigned }, &c).unwrap();
+            out.as_array().unwrap().clone()
+        };
+        let all = list(None, false);
+        let jump = all.iter().find(|v| v["name"] == json!("jump")).unwrap();
+        assert_eq!(jump["projects"][0]["path"], json!("sfx/jump.wav"));
+        let names = |v: Vec<Value>| v.into_iter().map(|x| x["name"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+        assert_eq!(names(list(Some("Game"), false)), ["jump"]);
+        assert_eq!(names(list(None, true)), ["coin"]);
     }
 }

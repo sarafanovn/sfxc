@@ -5,8 +5,6 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use directories::ProjectDirs;
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
-use serde::{Deserialize, Serialize};
-use sfxc_core::export::ExportOptions;
 use sfxc_core::patch::SoundPatch;
 
 mod link_migration;
@@ -90,13 +88,6 @@ const MIGRATIONS: &[Migration] = &[
 
 const NEWER_LIBRARY: &str = "this library was upgraded by a newer sfxc; update the app and sfxc-cli";
 
-/// Where `sfxc-cli export` writes a sound and with which settings. `path` is absolute.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct ExportLink {
-    pub path: String,
-    pub options: ExportOptions,
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct SoundSummary {
     pub id: i64,
@@ -130,22 +121,6 @@ impl Store {
 
     pub fn open_in_memory() -> Result<Self> {
         Self::init(Connection::open_in_memory()?, None)
-    }
-
-    pub fn export_link(&self, id: i64) -> Result<Option<ExportLink>> {
-        let json: Option<String> = self.conn.query_row("SELECT export_link FROM sounds WHERE id = ?1", [id], |r| r.get(0))?;
-        json.map(|j| serde_json::from_str(&j).context("export link is unreadable")).transpose()
-    }
-
-    pub fn set_export_link(&self, id: i64, link: &ExportLink) -> Result<()> {
-        self.conn.execute("UPDATE sounds SET export_link = ?1 WHERE id = ?2", params![serde_json::to_string(link)?, id])?;
-        Ok(())
-    }
-
-    pub fn linked_sounds(&self) -> Result<Vec<i64>> {
-        let mut stmt = self.conn.prepare("SELECT id FROM sounds WHERE export_link IS NOT NULL ORDER BY id")?;
-        let rows = stmt.query_map([], |r| r.get(0))?;
-        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     /// Changes whenever another connection commits; this connection's own writes leave it as is.
@@ -802,24 +777,10 @@ mod tests {
             .unwrap();
         }
         let s = Store::open(&path).unwrap();
-        let id = s.find_sound("old").unwrap();
-        assert_eq!(s.export_link(id).unwrap(), None);
+        s.find_sound("old").unwrap();
+        assert!(s.list_projects().unwrap().is_empty());
         drop(s);
         cleanup(&path);
-    }
-
-    #[test]
-    fn export_link_round_trip_and_listing() {
-        let s = Store::open_in_memory().unwrap();
-        let a = s.create_sound("a", &patch(300.0), 10).unwrap();
-        let _b = s.create_sound("b", &patch(300.0), 10).unwrap();
-        let link = ExportLink {
-            path: "/tmp/sfx/a.ogg".into(),
-            options: ExportOptions { format: ExportFormat::Ogg { quality: 5.0 }, ..Default::default() },
-        };
-        s.set_export_link(a, &link).unwrap();
-        assert_eq!(s.export_link(a).unwrap(), Some(link));
-        assert_eq!(s.linked_sounds().unwrap(), vec![a]);
     }
 
     #[test]

@@ -21,8 +21,14 @@ pub enum Command {
     List {
         #[arg(long, default_value = "")]
         search: String,
+        /// Only sounds in this project (sorted by path).
+        #[arg(long, conflicts_with = "unassigned")]
+        project: Option<String>,
+        /// Only sounds in no project.
+        #[arg(long)]
+        unassigned: bool,
     },
-    /// A sound's patch, versions and export link. SOUND is an id or an exact name.
+    /// A sound's patch, versions and projects. SOUND is an id or an exact name.
     Show { sound: String },
     /// Create a sound from a generator category or from patch JSON.
     New {
@@ -37,6 +43,12 @@ pub enum Command {
         /// Patch JSON file, or `-` for stdin.
         #[arg(long)]
         patch: Option<String>,
+        /// Also add the sound to this project (id or name).
+        #[arg(long)]
+        project: Option<String>,
+        /// Path in that project; default: the sound's name. Needs --project.
+        #[arg(long, requires = "project")]
+        path: Option<String>,
     },
     /// Nudge every parameter a little, like the app's Mutate button.
     Mutate {
@@ -65,7 +77,7 @@ pub enum Command {
     Versions { sound: String },
     /// Make an older version the current one; the current state is kept as a version first.
     Restore { sound: String, version: i64 },
-    /// Render to a file and remember it; later `export SOUND` or `export --linked` rewrites the same file.
+    /// Render one sound to a file once. For files in a game, use `project`.
     Export(ExportArgs),
     /// Duration, level, brightness and envelope of the rendered sound.
     Analyze { sound: String },
@@ -146,13 +158,12 @@ impl ModeArg {
 
 #[derive(clap::Args)]
 pub struct ExportArgs {
-    /// Sound to export; omit with --linked.
-    #[arg(required_unless_present = "linked", conflicts_with = "linked")]
+    /// Sound to export.
     pub sound: Option<String>,
-    /// Re-export every sound that has an export link.
-    #[arg(long)]
+    /// Replaced by `project export`; kept only to explain that.
+    #[arg(long, hide = true)]
     pub linked: bool,
-    /// Target file; relative paths resolve against the current directory. Sets the sound's export link.
+    /// Target file; relative paths resolve against the current directory.
     #[arg(long)]
     pub to: Option<PathBuf>,
     /// Default: from the file extension.
@@ -220,6 +231,28 @@ pub enum ProjectCommand {
     },
     /// Take a sound out of the project. The sound and its file stay.
     Remove { project: String, sound: String },
+    /// Write the sounds changed since the last project export. Files gone from disk are listed in
+    /// `skipped_missing` unless --include-missing.
+    Export(ProjectExportArgs),
+}
+
+#[derive(clap::Args)]
+pub struct ProjectExportArgs {
+    /// Project id or name; omit with --all.
+    #[arg(required_unless_present = "all", conflicts_with = "all")]
+    pub project: Option<String>,
+    /// Every project.
+    #[arg(long)]
+    pub all: bool,
+    /// Also write unchanged sounds whose file is gone.
+    #[arg(long)]
+    pub include_missing: bool,
+    /// Create the project folder if it does not exist (it may be on a disk that is not connected).
+    #[arg(long)]
+    pub create_root: bool,
+    /// Print what would be written; change nothing.
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 /// Export settings of a sound in a project. Unset flags keep the current value (`add`: the default).
