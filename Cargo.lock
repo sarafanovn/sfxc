@@ -3287,7 +3287,7 @@ dependencies = [
 
 [[package]]
 name = "sfxc-app"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "cpal",
@@ -3301,7 +3301,7 @@ dependencies = [
 
 [[package]]
 name = "sfxc-cli"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -3313,7 +3313,7 @@ dependencies = [
 
 [[package]]
 name = "sfxc-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "hound",
@@ -3326,7 +3326,7 @@ dependencies = [
 
 [[package]]
 name = "sfxc-store"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "directories",
@@ -3339,7 +3339,7 @@ dependencies = [
 
 [[package]]
 name = "sfxc-update"
-version = "0.1.1"
+version = "0.1.2"
 
 [[package]]
 name = "shlex"
