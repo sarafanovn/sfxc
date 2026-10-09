@@ -47,7 +47,7 @@ Or with Homebrew:
 
 ```sh
 brew install --cask sarafanovn/tap/sfxc   # the app, to /Applications
-brew install sarafanovn/tap/sfxc-cli      # the CLI, built from source
+brew install sarafanovn/tap/sfxc-cli      # the CLI, a prebuilt binary
 ```
 
 ### Updates

@@ -89,8 +89,9 @@ jobs:
           sums="$(curl -fsSL "$base/releases/download/$GITHUB_REF_NAME/SHA256SUMS")"
           arm="$(awk '$2 == "sfxc-app-arm64.zip" { print $1 }' <<<"$sums")"
           intel="$(awk '$2 == "sfxc-app-x86_64.zip" { print $1 }' <<<"$sums")"
-          src="$(curl -fsSL "$base/archive/refs/tags/$GITHUB_REF_NAME.tar.gz" | sha256sum | cut -d' ' -f1)"
-          [ -n "$arm" ] && [ -n "$intel" ] && [ -n "$src" ] || { echo "::error::missing checksums"; exit 1; }
+          cli_arm="$(awk '$2 == "sfxc-cli-arm64" { print $1 }' <<<"$sums")"
+          cli_intel="$(awk '$2 == "sfxc-cli-x86_64" { print $1 }' <<<"$sums")"
+          [ -n "$arm" ] && [ -n "$intel" ] && [ -n "$cli_arm" ] && [ -n "$cli_intel" ] || { echo "::error::missing checksums"; exit 1; }
 
           git clone -q "https://x-access-token:$TAP_TOKEN@github.com/sarafanovn/homebrew-tap.git" tap
           cd tap
@@ -99,11 +100,13 @@ jobs:
             -e "s/(sha256 arm: *)\"[0-9a-f]{64}\"/\1\"$arm\"/" \
             -e "s/(intel: *)\"[0-9a-f]{64}\"/\1\"$intel\"/" \
             Casks/sfxc.rb
+          # The formula installs the prebuilt binaries (no Rust needed): one url and sha256 per architecture.
           sed -i -E \
-            -e "s#(/archive/refs/tags/)v[^\"]*\.tar\.gz#\1$GITHUB_REF_NAME.tar.gz#" \
-            -e "s/^(\s*sha256 )\"[0-9a-f]{64}\"/\1\"$src\"/" \
+            -e "s#(/releases/download/)v[^/]*(/sfxc-cli-)#\1$GITHUB_REF_NAME\2#" \
+            -e "/on_arm do/,/end/ s/(sha256 )\"[0-9a-f]{64}\"/\1\"$cli_arm\"/" \
+            -e "/on_intel do/,/end/ s/(sha256 )\"[0-9a-f]{64}\"/\1\"$cli_intel\"/" \
             Formula/sfxc-cli.rb
-          grep -q "\"$version\"" Casks/sfxc.rb && grep -q "$src" Formula/sfxc-cli.rb || { echo "::error::the cask or formula did not take the new version"; git diff; exit 1; }
+          grep -q "\"$version\"" Casks/sfxc.rb && grep -q "$cli_arm" Formula/sfxc-cli.rb && grep -q "$cli_intel" Formula/sfxc-cli.rb && grep -q "/$GITHUB_REF_NAME/sfxc-cli-" Formula/sfxc-cli.rb || { echo "::error::the cask or formula did not take the new version"; git diff; exit 1; }
           git diff --stat
           git diff --quiet && exit 0
           git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
