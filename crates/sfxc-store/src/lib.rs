@@ -11,6 +11,7 @@ use sfxc_core::patch::SoundPatch;
 
 mod link_migration;
 mod projects;
+pub mod project_export;
 
 pub use projects::{
     normalize_rel_path, relative_to_root, replace_extension, MemberFormat, MemberOptions, Membership, Project, ProjectSummary,
