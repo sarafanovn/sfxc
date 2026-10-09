@@ -18,14 +18,39 @@ Every command prints JSON. Errors go to stderr as one `error: …` line with exi
 
 ## Workflow
 
-1. `sfxc-cli schema` — categories, modes, sources, effects, every parameter range, and an example patch. Read it first.
-2. Create: `sfxc-cli new --name "Player jump" --category jump [--mode 8bit]`. Names are unique.
-3. Check: `sfxc-cli analyze "Player jump"` — duration, peak, RMS, brightness (`spectral_centroid_hz`) and a 10-point envelope.
-4. Adjust: `sfxc-cli set "Player jump" layers.0.pitch.base_freq=520 layers.0.env.release=0.12`, or `sfxc-cli mutate "Player jump"` for small random variations.
-5. Put it into the game. Once per game: `sfxc-cli project new "My game" --root path/to/game/assets` (default root: the current directory). Then `sfxc-cli project add "My game" "Player jump" --path sfx/jump.wav` — the path is relative to the project's root, not to your current directory; the output's `abs_path` shows where the file goes. Or create and add in one step: `sfxc-cli new --name coin --category coin --project "My game" --path sfx/coin.ogg`.
-6. Write files: `sfxc-cli project export "My game"` writes only the sounds changed since the last project export (including a person's unsaved edits in the app). After a person changes sounds in the app: `sfxc-cli project export --all`.
+1. `sfxc-cli schema` — categories, modes, sources, effects, every parameter range, an example patch and short working notes. Read it first.
+2. Look before you create: `sfxc-cli project list` (is there a project for this game?) and `sfxc-cli list --project "My game" --search jump` (is there already a sound like this?). Reuse and edit instead of making a near-duplicate; names are unique.
+3. Create: `sfxc-cli new --name "Player jump" --category jump [--mode 8bit] --project "My game" --path sfx/player/jump.ogg`. The project must exist; once per game: `sfxc-cli project new "My game" --root path/to/game/assets` (default root: the current directory).
+4. Tag it right away (see [Tags](#tags-and-names)): `sfxc-cli tag "Player jump" "player movement short"`.
+5. Check: `sfxc-cli analyze "Player jump"` — duration, peak, RMS, brightness (`spectral_centroid_hz`) and a 10-point envelope. You cannot listen, so judge by these numbers and compare with similar sounds.
+6. Adjust: one `sfxc-cli set "Player jump" layers.0.pitch.base_freq=520 layers.0.env.release=0.12` with all changes at once (every call is one version), or `sfxc-cli mutate "Player jump"` for small random variations. Repeat 5–6.
+7. Write files: `sfxc-cli project export "My game"` writes only the sounds changed since the last project export (including a person's unsaved edits in the app). Preview with `--dry-run`. After a person changes sounds in the app, nothing special is needed: `project export` sees their changes; `project export --all` rewrites everything.
 
 A sound is an id or its exact name.
+
+## Working efficiently
+
+- **One project per game, one path per sound.** Paths are relative to the project's root, so `sfx/ui/click.ogg`, not an absolute path. Group by folder (`sfx/ui/`, `sfx/player/`, `sfx/enemies/`): the folder is what the game code loads. The output's `abs_path` shows where the file goes.
+- **Create and add in one step** (`new --project --path`), so no sound is left in no project. `sfxc-cli list --unassigned` finds the stragglers; add them with `project add`.
+- **Format.** `ogg` is small and fine for the game; `wav` for short UI blips or when the engine wants it. The extension of `--path` picks it; `project add`/`set` also take `--format` (changing it renames the extension).
+- **Batch.** One `set` with many assignments, one `project export` at the end of a session, not after every tweak. `project export` is idempotent: running it again writes nothing.
+- **Keep the person's work.** A person may have tuned a sound in the app. Before replacing a patch with `put`, read it with `show`; `versions` and `restore` undo anything. Prefer `set` for small changes. The CLI never deletes sounds, and sfxc never deletes files on disk.
+- **Read, don't guess.** `show S` has the patch, tags, versions and `projects` with each `path` and `changed`; `project show P` lists the whole project with `changed` and `missing` flags. Both are small; call them instead of remembering.
+
+## Tags and names
+
+Tags make sounds findable for you and for the person (the app's search and the CLI's `--search` match the name and the tags; inside a project also the path). `sfxc-cli tag S "a b c"` **replaces** all tags, so read the current ones first (`show S` or `list`) and send the full set. Tags are space-separated lowercase words.
+
+Use a small stable vocabulary, one word from each group that applies:
+
+| Group | Examples |
+|---|---|
+| what it is (category) | `coin` `jump` `hit` `explosion` `laser` `powerup` `blip` `ambient` |
+| who or where | `player` `enemy` `boss` `ui` `menu` `pickup` `door` |
+| feel | `short` `long` `soft` `harsh` `bright` `dark` `retro` |
+| status | `wip` while you iterate, `final` when it is ready; remove `wip` when you finish |
+
+Before inventing a tag, run `sfxc-cli list` and reuse the words already there. Name sounds by what they do in the game (`Player jump`, `Coin pickup`), not by how they were made; the path carries the folder.
 
 ## What the parameters do
 
