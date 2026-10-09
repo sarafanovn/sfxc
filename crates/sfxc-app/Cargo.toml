@@ -10,6 +10,7 @@ path = "src/main.rs"
 [dependencies]
 sfxc-core = { path = "../sfxc-core" }
 sfxc-store = { path = "../sfxc-store" }
+sfxc-update = { path = "../sfxc-update" }
 anyhow = "1"
 eframe = "0.36"
 cpal = "0.18"

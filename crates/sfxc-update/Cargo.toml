@@ -1,0 +1,6 @@
+[package]
+name = "sfxc-update"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]

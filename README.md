@@ -41,7 +41,13 @@ sfxc is in the spirit of sfxr and bfxr: click a category, get a coin, a laser or
 curl -fsSL https://raw.githubusercontent.com/sarafanovn/sfxc/main/install.sh | bash
 ```
 
-A small menu lets you toggle `sfxc.app` (to `~/Applications`) and `sfxc-cli` (to `~/.local/bin`). It downloads the latest release, or builds from source if there is none (needs Rust). Run it again to update. Remove everything with `... | bash -s -- --uninstall`; your library is kept.
+A small menu lets you toggle `sfxc.app` (to `~/Applications`) and `sfxc-cli` (to `~/.local/bin`). It downloads the latest release, or builds from source if there is none (needs Rust). Remove everything with `... | bash -s -- --uninstall`; your library is kept.
+
+### Updates
+
+Once a day the app checks GitHub for a newer release and shows **Update to …** in the title bar; a click installs it and restarts sfxc. `sfxc-cli update` updates the CLI (`--check` only reports). Running the install command again also updates. Set `SFXC_NO_UPDATE_CHECK=1` to turn the automatic check off.
+
+Releases are built by GitHub Actions when a `v*` tag matching the version in `Cargo.toml` is pushed.
 
 ### Build from source
 

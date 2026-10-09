@@ -12,6 +12,8 @@ cargo install --path crates/sfxc-cli
 
 Every command prints JSON. Errors go to stderr as one `error: …` line with exit code 1.
 
+`sfxc-cli update` installs the latest release to `~/.local/bin`; `update --check` only prints `current`, `latest` and `update_available`. When stderr is a terminal, other commands may add one "is available" line to stderr (checked at most once a day; `SFXC_NO_UPDATE_CHECK=1` turns it off). Without a terminal there is no check and no extra output.
+
 ## Workflow
 
 1. `sfxc-cli schema` — categories, modes, sources, effects, every parameter range, and an example patch. Read it first.

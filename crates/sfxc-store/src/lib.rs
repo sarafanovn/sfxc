@@ -362,6 +362,11 @@ pub fn library_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("library.db"))
 }
 
+/// Next to the library; remembers the last update check so the app and the CLI ask GitHub at most once a day.
+pub fn update_cache_path() -> PathBuf {
+    library_path().with_file_name("update-check")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

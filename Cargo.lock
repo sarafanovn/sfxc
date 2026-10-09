@@ -3296,6 +3296,7 @@ dependencies = [
  "rfd",
  "sfxc-core",
  "sfxc-store",
+ "sfxc-update",
 ]
 
 [[package]]
@@ -3307,6 +3308,7 @@ dependencies = [
  "serde_json",
  "sfxc-core",
  "sfxc-store",
+ "sfxc-update",
 ]
 
 [[package]]
@@ -3333,6 +3335,10 @@ dependencies = [
  "serde_json",
  "sfxc-core",
 ]
+
+[[package]]
+name = "sfxc-update"
+version = "0.1.0"
 
 [[package]]
 name = "shlex"

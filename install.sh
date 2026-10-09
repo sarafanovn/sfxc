@@ -6,11 +6,14 @@
 # Flags: --app  --cli  --all   skip the menu and install these
 #        --source              build from source instead of downloading a release
 #        --uninstall           remove what this script installed (the library is kept)
+# SFXC_NONINTERACTIVE=1 never reads the terminal (the app and `sfxc-cli update` set it).
 set -euo pipefail
 
 REPO="${SFXC_REPO:-sarafanovn/sfxc}"
 APP_DIR="$HOME/Applications"
 BIN_DIR="$HOME/.local/bin"
+
+say() { printf '%s\n' "$*"; }
 
 want_app=1 want_cli=1 from_source=0 uninstall=0 flagged=0
 for arg in "$@"; do
@@ -27,13 +30,12 @@ for arg in "$@"; do
 done
 
 if [ -t 1 ]; then b=$'\033[1m' d=$'\033[2m' g=$'\033[32m' r=$'\033[31m' z=$'\033[0m'; else b= d= g= r= z=; fi
-say() { printf '%s\n' "$*"; }
 die() { printf '%serror:%s %s\n' "$r" "$z" "$*" >&2; exit 1; }
 
 [ "$(uname -s)" = Darwin ] || die "sfxc is packaged for macOS only."
 
 have_tty=0
-{ : </dev/tty; } 2>/dev/null && have_tty=1
+[ -z "${SFXC_NONINTERACTIVE:-}" ] && { : </dev/tty; } 2>/dev/null && have_tty=1
 
 # Two toggles. Up/down moves, space flips, enter confirms, q quits.
 menu() {

@@ -23,6 +23,7 @@ pub struct Ctx {
 pub fn run(store: &Store, command: Command, ctx: &Ctx) -> Result<Value> {
     match command {
         Command::Schema => Ok(crate::schema::schema()),
+        Command::Update { check } => crate::update::run(check),
         Command::List { search } => list(store, &search),
         Command::Show { sound } => show(store, store.find_sound(&sound)?),
         Command::New { name, category, mode, seed, patch } => {

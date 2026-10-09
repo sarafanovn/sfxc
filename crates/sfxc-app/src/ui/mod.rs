@@ -9,6 +9,7 @@ mod library;
 mod material;
 mod order;
 mod theme;
+mod update;
 mod versions;
 mod widgets;
 
@@ -28,6 +29,7 @@ use crate::render_worker::{RenderJob, RenderResult, RenderWorker};
 use sfxc_store::{SoundSummary, Store, VersionInfo};
 use export_dialog::ExportDialog;
 use library::Prefs;
+use update::UpdateState;
 use theme::ThemeChoice;
 use widgets::{button, dialog, Kind};
 
@@ -163,6 +165,7 @@ pub struct SfxcApp {
     last_auto_check: Instant,
     data_version: Option<i64>,
     last_sync: Instant,
+    update: UpdateState,
 }
 
 impl SfxcApp {
@@ -197,6 +200,7 @@ impl SfxcApp {
             last_auto_check: Instant::now(),
             data_version: None,
             last_sync: Instant::now(),
+            update: update::start_check(&cc.egui_ctx),
         };
         app.open_store();
         app.apply_prefs();
@@ -847,7 +851,7 @@ impl SfxcApp {
         ctx.request_repaint_after(Duration::from_millis(30));
     }
 
-    fn title_bar(&self, ui: &mut egui::Ui) {
+    fn title_bar(&mut self, ui: &mut egui::Ui) {
         let p = theme::palette_of(ui.ctx());
         egui::Panel::top("titlebar")
             .exact_size(TITLEBAR_H)
@@ -871,6 +875,7 @@ impl SfxcApp {
                     egui::FontId::new(12.5, theme::semibold()),
                     p.muted,
                 );
+                self.update_badge(ui, rect);
             });
     }
 
@@ -907,6 +912,7 @@ impl SfxcApp {
 impl eframe::App for SfxcApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        self.poll_update();
         self.title_bar(ui);
         if self.store.is_none() {
             self.library_error_screen(ui);

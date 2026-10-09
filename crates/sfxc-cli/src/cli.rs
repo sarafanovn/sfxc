@@ -69,6 +69,12 @@ pub enum Command {
     Export(ExportArgs),
     /// Duration, level, brightness and envelope of the rendered sound.
     Analyze { sound: String },
+    /// Install the latest sfxc-cli release to ~/.local/bin. Prints current and latest versions.
+    Update {
+        /// Only report whether a newer release exists.
+        #[arg(long)]
+        check: bool,
+    },
 }
 
 #[derive(Subcommand)]

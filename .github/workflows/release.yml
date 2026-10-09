@@ -1,0 +1,73 @@
+# Push a tag like v0.2.0 to publish a release. The tag must match `version` in Cargo.toml.
+# Asset names are what install.sh downloads: sfxc-app-<arch>.zip and sfxc-cli-<arch>.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            arch: arm64
+          - target: x86_64-apple-darwin
+            arch: x86_64
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Check tag matches Cargo.toml
+        run: |
+          version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)"
+          [ "v$version" = "$GITHUB_REF_NAME" ] || { echo "::error::tag $GITHUB_REF_NAME, Cargo.toml says $version"; exit 1; }
+
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build sfxc.app
+        run: ./scripts/bundle.sh ${{ matrix.target }}
+
+      - name: Build sfxc-cli
+        run: cargo build --release --locked -p sfxc-cli --target ${{ matrix.target }}
+
+      - name: Package
+        run: |
+          mkdir dist
+          ditto -c -k --keepParent target/sfxc.app dist/sfxc-app-${{ matrix.arch }}.zip
+          cp target/${{ matrix.target }}/release/sfxc-cli dist/sfxc-cli-${{ matrix.arch }}
+          codesign --force --sign - dist/sfxc-cli-${{ matrix.arch }}
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dist-${{ matrix.arch }}
+          path: dist/*
+
+  release:
+    needs: build
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: dist-*
+          merge-multiple: true
+          path: dist
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          (cd dist && shasum -a 256 * > SHA256SUMS)
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes
