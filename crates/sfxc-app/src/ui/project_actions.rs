@@ -249,6 +249,10 @@ impl SfxcApp {
     }
 
     fn launch_project_export(&mut self, plan: ExportPlan, include_missing: bool, create_root: bool) {
+        // A prompt can outlive the moment it was opened: a quick export may have started since.
+        if self.export_busy() {
+            return self.toast("An export is already running");
+        }
         let items = plan.items(include_missing);
         if items.is_empty() {
             return;
@@ -366,7 +370,6 @@ impl SfxcApp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     fn item(name: &str, error: Option<&str>) -> ItemResult {
         ItemResult { sound_id: 1, name: name.into(), rel_path: format!("{name}.wav"), path: PathBuf::from(format!("/g/{name}.wav")), error: error.map(Into::into) }

@@ -4,9 +4,8 @@ use std::path::Path;
 
 use eframe::egui::{self, Id, RichText, Ui};
 use egui_phosphor::regular as icon;
-use sfxc_store::{relative_to_root, replace_extension, MemberFormat, MemberOptions, DEFAULT_OGG_QUALITY};
-
 use sfxc_store::project_export::ExportPlan;
+use sfxc_store::{relative_to_root, replace_extension, MemberFormat, MemberOptions, DEFAULT_OGG_QUALITY};
 
 use super::theme::palette;
 use super::widgets::{self, button, dialog, dropdown, field, toggle, Kind};
